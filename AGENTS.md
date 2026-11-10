@@ -6,7 +6,7 @@ Application web d'analyse budgétaire, 100 % locale : import de relevés bancair
 
 - Projet initialisé : Vite 8 (Rolldown), React 19, TypeScript 6, Tailwind CSS 4, shadcn/ui (style `radix-nova`), Recharts 3, PapaParse, Zod, Zustand, Vitest.
 - Application multi-pages (sidebar + routeur par hash) : vue d'ensemble, analyses, budgets, assistant, transactions, récurrences, marchands, couverture, saisie manuelle, réglages.
-- Dépôt git, branche `master`. Les relevés de référence ne sont **jamais versionnés** (données personnelles) : les copier dans `fixtures/`. Il reste à publier sur GitHub.
+- Dépôt git, branche `master`, publié sur https://github.com/RedsTom/budget-analyzer (public, GPL-3.0). Les relevés de référence ne sont **jamais versionnés** (données personnelles) : les copier dans `fixtures/`.
 - UI en français, devise EUR, locale `fr-FR`.
 
 ## Commandes
