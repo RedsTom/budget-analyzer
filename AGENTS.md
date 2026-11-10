@@ -6,7 +6,7 @@ Application web d'analyse budgétaire, 100 % locale : import de relevés bancair
 
 - Projet initialisé : Vite 8 (Rolldown), React 19, TypeScript 6, Tailwind CSS 4, shadcn/ui (style `radix-nova`), Recharts 3, PapaParse, Zod, Zustand, Vitest.
 - Application multi-pages (sidebar + routeur par hash) : vue d'ensemble, analyses, budgets, assistant, transactions, récurrences, marchands, couverture, saisie manuelle, réglages.
-- Dépôt git local, branche `master` ; ne pas modifier ni renommer les deux CSV de référence à la racine.
+- Dépôt git, branche `master`. Les relevés de référence ne sont **jamais versionnés** (données personnelles) : les copier dans `fixtures/`. Il reste à publier sur GitHub.
 - UI en français, devise EUR, locale `fr-FR`.
 
 ## Commandes
@@ -21,8 +21,8 @@ Ordre de vérification avant de livrer : `npm run lint && npm run test && npm ru
 
 ## Données de référence (vérifiées)
 
-- `00021876101(1).csv` — historique complet : 1 728 lignes, 2023-10-23 → 2026-11-05.
-- `00021876101.csv` — 198 lignes, 2026-08-25 → 2026-11-05. **Sous-ensemble exact et ordonné des 198 dernières lignes du fichier complet.** Le suffixe `(1)` est un doublon de téléchargement, pas un second compte.
+- `fixtures/releve-complet.csv` — historique complet : 1 728 lignes, 2023-10-23 → 2026-11-05.
+- `fixtures/releve-partiel.csv` — 198 lignes, 2026-08-25 → 2026-11-05. **Sous-ensemble exact et ordonné des 198 dernières lignes du fichier complet.**
 - Format : `;`, **Windows-1252** (pas UTF-8 : `0xE9` = `é`), sans guillemets, colonnes `Date;Date de valeur;Débit;Crédit;Libellé;Solde`.
 - Dates `jj/mm/aaaa` ; montants à virgule, sans séparateur de milliers ; **`Débit` est déjà négatif — ne pas réinverser le signe** ; `Débit` et `Crédit` ne sont jamais renseignés ensemble.
 - `Solde` est un solde courant continu dans l'ordre du fichier : 0 rupture sur 1 727 transitions. L'ordre du fichier fait foi ; ne pas trier par `Date de valeur` (51 lignes ont une valeur future).
@@ -32,7 +32,7 @@ Ordre de vérification avant de livrer : `npm run lint && npm run test && npm ru
 
 - Clé = **ligne brute complète** `date|valueDate|debit|credit|rawLabel|solde`, hashée SHA-256 → `id` = `<hash>:<occurrence>` (`src/lib/dedupe.ts`).
 - Ne **jamais** dédoublonner sur `date + montant + libellé` : 17 groupes partagent ces champs avec des soldes différents (vrais achats répétés).
-- Fusion **multiensemble** : on ne retire que la sur-occurrence déjà présente. Deux lignes identiques d'un même export peuvent être deux opérations réelles — c'est le cas de deux lignes `30/07/2024 VIR DE M TOM BUTIN +20,00 solde 57,68` ; en supprimer une casse la chaîne des soldes.
+- Fusion **multiensemble** : on ne retire que la sur-occurrence déjà présente. Deux lignes identiques d'un même export peuvent être deux opérations réelles : en supprimer une casse la chaîne des soldes.
 - Attendu en important les deux fichiers : **1 728 transactions**, 198 ignorées (chevauchement), 0 doublon interne.
 - Le hash porte sur `rawLabel` immuable, jamais sur le nom renommé.
 - Conserver `sourceFile` et `order` pour la traçabilité, hors de la clé.
@@ -137,7 +137,7 @@ Ordre de vérification avant de livrer : `npm run lint && npm run test && npm ru
 
 - TypeScript 6 : `baseUrl` est déprécié → ne pas le remettre, `paths` suffit.
 - WebCrypto + TS 6 : typer les octets `Uint8Array<ArrayBuffer>` (pas `Uint8Array<ArrayBufferLike>`), sinon `BufferSource` refuse.
-- Les tests lisent les CSV à la racine via `new URL('../../000...', import.meta.url)` ; ne pas déplacer les fixtures.
+- Les tests d'intégration lisent `fixtures/releve-complet.csv` et `fixtures/releve-partiel.csv` et sont **sautés** (`describe.skipIf`) si ces fichiers sont absents.
 - `npm run build` inclut le typecheck : lancer les tests d'abord pour un diagnostic plus clair.
 - Quota `localStorage` ≈ 5 Mo : suffisant pour ~1 700 lignes ; garder une seule clé.
 - Recharts 3 : `Bar.onClick` reçoit `(data, index, event)`. Le graphique de solde n'a plus de `Brush` : c'est le sélecteur de période global qui pilote la fenêtre.
@@ -145,7 +145,7 @@ Ordre de vérification avant de livrer : `npm run lint && npm run test && npm ru
 - Recharts ne fournit pas de ticks lisibles sur les courtes périodes si le formateur reste mensuel : `balance-timeline` bascule en `d MMM` sous 120 jours.
 - Icônes lucide absentes du build : `BarChart3`, `Filter`, `Trash2`, `CircleAlert`, `MoreHorizontal`, `CircleHelp` — choisir des équivalents disponibles.
 
-## Tests de non-régression (fixtures = ces 2 CSV)
+## Tests de non-régression (fixtures locales, non versionnées)
 
 - Fichier complet : 1 728 lignes, 0 erreur ; fichier court : 198 lignes, 0 erreur.
 - Import complet puis court : 1 728 transactions, 198 ignorées, 0 ajout au second import.

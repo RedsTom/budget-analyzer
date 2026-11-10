@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   decodeCsvBytes,
@@ -9,10 +9,16 @@ import {
   parseFrenchDate,
 } from './csv'
 
-const complete = readFileSync(
-  new URL('../../00021876101(1).csv', import.meta.url),
-)
-const partial = readFileSync(new URL('../../00021876101.csv', import.meta.url))
+// Les relevés de référence sont des données personnelles : ils ne sont pas
+// versionnés. Copiez-les dans fixtures/ pour lancer les tests d'intégration.
+const completePath = new URL('../../fixtures/releve-complet.csv', import.meta.url)
+const partialPath = new URL('../../fixtures/releve-partiel.csv', import.meta.url)
+const hasFixtures = existsSync(completePath) && existsSync(partialPath)
+const readFixture = (path: URL) =>
+  existsSync(path) ? readFileSync(path) : Buffer.alloc(0)
+
+const complete = readFixture(completePath)
+const partial = readFixture(partialPath)
 
 describe('décodage', () => {
   it('décode le Windows-1252 (é = 0xE9), pas l’UTF-8', () => {
@@ -60,7 +66,7 @@ describe('parseFrenchDate', () => {
   })
 })
 
-describe('parseCsvText', () => {
+describe.skipIf(!hasFixtures)('parseCsvText — relevés de référence', () => {
   it('parse l’historique complet', () => {
     const { rows, errors } = parseCsvText(complete.toString('latin1'))
     expect(rows).toHaveLength(1728)
@@ -85,7 +91,9 @@ describe('parseCsvText', () => {
     expect(errors).toHaveLength(0)
     expect(rows[0].date).toBe('2026-08-25')
   })
+})
 
+describe('parseCsvText', () => {
   it('signale les lignes invalides sans bloquer le reste', () => {
     const csv = [
       'Date;Date de valeur;Débit;Crédit;Libellé;Solde',

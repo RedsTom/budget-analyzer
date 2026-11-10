@@ -1,20 +1,21 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseCsvText } from './csv'
 import { mergeTransactions } from './dedupe'
 import { balanceChainBreaks } from './runway'
 
-const complete = readFileSync(
-  new URL('../../00021876101(1).csv', import.meta.url),
-).toString('latin1')
-const partial = readFileSync(
-  new URL('../../00021876101.csv', import.meta.url),
-).toString('latin1')
+// Les relevés de référence sont des données personnelles : ils ne sont pas
+// versionnés. Copiez-les dans fixtures/ pour lancer les tests d'intégration.
+const completePath = new URL('../../fixtures/releve-complet.csv', import.meta.url)
+const partialPath = new URL('../../fixtures/releve-partiel.csv', import.meta.url)
+const hasFixtures = existsSync(completePath) && existsSync(partialPath)
+const readFixture = (path: URL) =>
+  existsSync(path) ? readFileSync(path).toString('latin1') : ''
 
-const completeRows = parseCsvText(complete).rows
-const partialRows = parseCsvText(partial).rows
+const completeRows = hasFixtures ? parseCsvText(readFixture(completePath)).rows : []
+const partialRows = hasFixtures ? parseCsvText(readFixture(partialPath)).rows : []
 
-describe('mergeTransactions', () => {
+describe.skipIf(!hasFixtures)('mergeTransactions', () => {
   it('garde les lignes identiques d’un même export (multiensemble)', async () => {
     const first = await mergeTransactions([], completeRows, '00021876101(1).csv')
     // Les deux lignes identiques du 30/07/2024 sont deux opérations réelles :
