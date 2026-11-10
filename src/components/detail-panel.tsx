@@ -50,7 +50,7 @@ export function DetailPanel({
           type="button"
           variant="ghost"
           size="icon-sm"
-          className="absolute top-2 right-2"
+          className="absolute top-2 right-2 max-sm:size-10"
           aria-label="Fermer le panneau"
           onClick={onClose}
         >
@@ -86,7 +86,9 @@ export function DetailPanel({
       </div>
 
       {footer ? (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-t p-4">{footer}</div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-t p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          {footer}
+        </div>
       ) : null}
     </div>
   )

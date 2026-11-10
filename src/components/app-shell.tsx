@@ -1,87 +1,43 @@
-import { useEffect, useState, type ComponentType } from 'react'
-import {
-  ArrowLeftRight,
-  ChartColumn,
-  LayoutDashboard,
-  Lock,
-  Menu,
-  Repeat,
-  Settings,
-  ShieldCheck,
-  Sparkles,
-  SquarePen,
-  Store,
-  Target,
-  Timer,
-  Wallet,
-} from 'lucide-react'
+import { Suspense, useEffect, useRef, type ComponentType } from 'react'
+import { Loader2, Lock, ShieldCheck, Wallet, WifiOff } from 'lucide-react'
+import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from '@/components/ui/sheet'
 import { DetailHost } from '@/components/entity-panels'
 import { EmptyVault } from '@/components/empty-vault'
+import { MobileTabBar } from '@/components/mobile-tab-bar'
+import { PageErrorBoundary } from '@/components/page-error-boundary'
+import { PageSkeleton } from '@/components/page-skeleton'
 import { PeriodPicker } from '@/components/period-picker'
+import { QuickTransactionSheet } from '@/components/quick-transaction-sheet'
+import { NAV_GROUPS, ROUTE_BY_ID } from '@/app/routes'
+import { useOnline } from '@/hooks/use-online'
 import { usePage, navigate, type PageId } from '@/lib/router'
 import { datasetRange } from '@/lib/period'
 import { formatCount, formatDate } from '@/lib/format'
 import { useUiStore } from '@/store/ui-store'
 import { useVaultStore } from '@/store/vault-store'
 import { cn } from 'cn'
-import { OverviewPage } from '@/pages/overview-page'
-import { AssistantPage } from '@/pages/assistant-page'
-import { AnalysisPage } from '@/pages/analysis-page'
-import { BudgetsPage } from '@/pages/budgets-page'
-import { TransactionsPage } from '@/pages/transactions-page'
-import { RecurringPage } from '@/pages/recurring-page'
-import { MerchantsPage } from '@/pages/merchants-page'
-import { CoveragePage } from '@/pages/coverage-page'
-import { ManualEntryPage } from '@/pages/manual-entry-page'
-import { SettingsPage } from '@/pages/settings-page'
-
-interface NavItem {
-  id: PageId
-  label: string
-  icon: ComponentType<{ className?: string }>
-}
-
-const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
-  {
-    label: 'Pilotage',
-    items: [
-      { id: 'overview', label: 'Vue d’ensemble', icon: LayoutDashboard },
-      { id: 'analysis', label: 'Analyses', icon: ChartColumn },
-      { id: 'budgets', label: 'Budgets', icon: Target },
-      { id: 'assistant', label: 'Assistant', icon: Sparkles },
-    ],
-  },
-  {
-    label: 'Explorer',
-    items: [
-      { id: 'transactions', label: 'Transactions', icon: ArrowLeftRight },
-      { id: 'recurring', label: 'Récurrences', icon: Repeat },
-      { id: 'merchants', label: 'Marchands', icon: Store },
-      { id: 'coverage', label: 'Couverture & runway', icon: Timer },
-    ],
-  },
-  {
-    label: 'Opérations',
-    items: [{ id: 'manual', label: 'Saisie manuelle', icon: SquarePen }],
-  },
-  {
-    label: 'Système',
-    items: [{ id: 'settings', label: 'Réglages', icon: Settings }],
-  },
-]
 
 export function AppShell() {
   const page = usePage()
-  const [mobileOpen, setMobileOpen] = useState(false)
+  const route = ROUTE_BY_ID[page]
+  const online = useOnline()
+  const vaultError = useVaultStore((state) => state.error)
+  const retrySave = useVaultStore((state) => state.retrySave)
+  const closeQuickEntry = useUiStore((state) => state.closeQuickEntry)
+  const mainRef = useRef<HTMLElement>(null)
+  const wasOnline = useRef(online)
+
+  // Le shell disparaît au verrouillage : ne pas rouvrir la feuille de saisie
+  // au déverrouillage suivant.
+  useEffect(() => () => closeQuickEntry(), [closeQuickEntry])
+
+  useEffect(() => {
+    if (wasOnline.current === online) return
+    wasOnline.current = online
+    if (online) toast.success('Connexion rétablie')
+  }, [online])
 
   // Changer de page ferme le panneau de détail, y compris via l'historique.
   useEffect(() => {
@@ -90,59 +46,62 @@ export function AppShell() {
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
+  useEffect(() => {
+    document.title = `${route.label} — Budget Analyzer`
+    mainRef.current?.scrollTo({ top: 0 })
+  }, [route.label])
+
   return (
-    <div className="flex h-svh flex-col bg-muted/25">
+    <div className="flex h-dvh flex-col bg-muted/25">
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r bg-sidebar lg:block">
         <SidebarContent page={page} />
       </aside>
 
       <div className="flex min-h-0 flex-1 flex-col lg:pl-64">
-        <header className="relative z-20 shrink-0 border-b bg-background/85 backdrop-blur">
-          <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-2 px-4 py-2.5 lg:px-8">
-            <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-              <SheetTrigger asChild>
-                <Button variant="outline" size="icon-sm" className="lg:hidden" aria-label="Menu">
-                  <Menu className="size-4" />
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="left" className="w-72 p-0">
-                <SheetHeader className="sr-only">
-                  <SheetTitle>Navigation</SheetTitle>
-                </SheetHeader>
-                <SidebarContent page={page} onNavigate={() => setMobileOpen(false)} />
-              </SheetContent>
-            </Sheet>
-
-            <div className="flex items-center gap-2 lg:hidden">
-              <div className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <Wallet className="size-3.5" />
-              </div>
-              <span className="font-heading text-sm font-medium">Budget Analyzer</span>
+        <header className="sticky top-0 z-20 shrink-0 border-b bg-background/85 pt-[env(safe-area-inset-top)] backdrop-blur">
+          <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-4 lg:px-8">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium lg:hidden">{route.label}</p>
+              <p className="hidden text-[11px] font-medium tracking-wide text-muted-foreground uppercase lg:block">
+                {route.group}
+              </p>
             </div>
 
-            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-              <MobileSaving />
+            <div className="flex shrink-0 items-center gap-2">
+              <SavingIndicator />
               <PeriodPicker />
-              <Button
-                variant="outline"
-                size="icon-sm"
-                aria-label="Verrouiller le coffre"
-                onClick={() => useVaultStore.getState().lock()}
-                className="lg:hidden"
-              >
-                <Lock className="size-3.5" />
-              </Button>
             </div>
           </div>
+
+          {!online ? (
+            <div className="flex items-center justify-center gap-2 border-t border-amber-500/20 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-800 dark:text-amber-300">
+              <WifiOff className="size-3.5 shrink-0" />
+              Hors ligne — les analyses locales restent disponibles.
+            </div>
+          ) : null}
+
+          {vaultError ? (
+            <div className="flex flex-wrap items-center justify-center gap-2 border-t border-destructive/20 bg-destructive/5 px-4 py-1.5 text-xs text-destructive">
+              <span>{vaultError}</span>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => void retrySave()}
+              >
+                Réessayer
+              </Button>
+            </div>
+          ) : null}
         </header>
 
         <div className="flex min-h-0 flex-1">
           <main
+            ref={mainRef}
             className={cn(
-              'min-h-0 min-w-0 flex-1 px-4 lg:px-8',
+              'min-h-0 min-w-0 flex-1 px-4 pb-[calc(4.5rem+env(safe-area-inset-bottom))] lg:px-8 lg:pb-0',
               page === 'assistant'
-                ? 'flex overflow-hidden py-4'
-                : 'overflow-y-auto py-6 pb-16',
+                ? 'flex overflow-hidden pt-4'
+                : 'overflow-y-auto pt-4 lg:pt-6',
             )}
           >
             <div
@@ -151,20 +110,43 @@ export function AppShell() {
                 page === 'assistant' && 'flex min-h-0 flex-1 flex-col',
               )}
             >
-              <PageOutlet page={page} />
+              <PageErrorBoundary key={page} page={page}>
+                <PageOutlet page={page} />
+              </PageErrorBoundary>
             </div>
           </main>
           <DetailHost />
         </div>
       </div>
+
+      <MobileTabBar page={page} />
+      <QuickTransactionSheet />
     </div>
   )
 }
 
-function MobileSaving() {
+function SavingIndicator() {
   const saving = useVaultStore((state) => state.saving)
-  if (!saving) return null
-  return <span className="hidden text-xs text-muted-foreground sm:inline">Sauvegarde…</span>
+  const error = useVaultStore((state) => state.error)
+
+  if (!saving && !error) return null
+
+  return (
+    <span
+      className="flex items-center gap-1 text-[11px] text-muted-foreground"
+      role="status"
+      aria-live="polite"
+    >
+      {saving ? (
+        <>
+          <Loader2 className="size-3 animate-spin" aria-hidden />
+          <span className="hidden sm:inline">Sauvegarde…</span>
+        </>
+      ) : (
+        <span className="size-2 rounded-full bg-destructive" aria-label="Erreur de sauvegarde" />
+      )}
+    </span>
+  )
 }
 
 function SidebarContent({
@@ -221,7 +203,7 @@ function SidebarContent({
             <div className="space-y-0.5">
               {group.items.map((item) => {
                 const active = page === item.id
-                const Icon = item.icon
+                const Icon = item.icon as ComponentType<{ className?: string }>
                 return (
                   <button
                     key={item.id}
@@ -230,6 +212,7 @@ function SidebarContent({
                       navigate(item.id)
                       onNavigate?.()
                     }}
+                    aria-current={active ? 'page' : undefined}
                     className={cn(
                       'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors',
                       active
@@ -263,29 +246,15 @@ function SidebarContent({
 }
 
 function PageOutlet({ page }: { page: PageId }) {
+  const route = ROUTE_BY_ID[page]
   const hasData = useVaultStore((state) => state.transactions.length > 0)
-  if (!hasData) return <EmptyVault />
 
-  switch (page) {
-    case 'overview':
-      return <OverviewPage />
-    case 'analysis':
-      return <AnalysisPage />
-    case 'budgets':
-      return <BudgetsPage />
-    case 'assistant':
-      return <AssistantPage />
-    case 'transactions':
-      return <TransactionsPage />
-    case 'recurring':
-      return <RecurringPage />
-    case 'merchants':
-      return <MerchantsPage />
-    case 'coverage':
-      return <CoveragePage />
-    case 'manual':
-      return <ManualEntryPage />
-    case 'settings':
-      return <SettingsPage />
-  }
+  if (route.requiresData && !hasData) return <EmptyVault />
+
+  const Component = route.component
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <Component key={page} />
+    </Suspense>
+  )
 }

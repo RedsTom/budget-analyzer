@@ -59,7 +59,7 @@ export function EmptyVault() {
         <div className="rounded-xl border bg-card p-4">
           <p className="text-xs font-medium text-muted-foreground">2 · Analyse</p>
           <p className="mt-1 text-sm">
-            Catégories, récurrences, couverture FIFO et runway sont calculés localement.
+            Catégories, récurrences, couverture manuelle et runway sont calculés localement.
           </p>
         </div>
         <div className="rounded-xl bg-card p-4 border">

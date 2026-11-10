@@ -506,7 +506,7 @@ export function CsvImporter({
                 : 'Choisir un fichier CSV'}
           </p>
           {!compact ? (
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="mt-1 hidden text-sm text-muted-foreground sm:block">
               {multiple
                 ? 'ou déposez-les ici · plusieurs fichiers acceptés'
                 : 'ou déposez-le ici · le format est détecté automatiquement'}

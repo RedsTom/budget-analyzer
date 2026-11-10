@@ -9,7 +9,7 @@ import {
 } from 'date-fns'
 import { categoryIdOf, type CategoryId } from './categories'
 import { resolveDisplayName } from './labels'
-import { referenceDate } from './period'
+import { referenceDate, type DateRange } from './period'
 import type { AliasEntry, RecurringDecision, Transaction } from './types'
 
 export type RecurringStatus = RecurringDecision | 'pending'
@@ -104,6 +104,20 @@ export interface RecurringOptions {
   /** Décisions de l'utilisateur par identifiant de série (absence = en attente). */
   decisions?: Record<string, RecurringDecision>
   aliases?: Record<string, AliasEntry>
+}
+
+/**
+ * Séries ayant au moins une occurrence ou une échéance à venir dans la période.
+ * La détection reste globale : la période ne filtre que l'affichage.
+ */
+export function seriesInRange(
+  series: RecurringSeries[],
+  range: DateRange,
+): RecurringSeries[] {
+  const within = (date: string) => date >= range.start && date <= range.end
+  return series.filter(
+    (item) => item.dates.some(within) || within(item.nextDate),
+  )
 }
 
 function median(values: number[]): number {

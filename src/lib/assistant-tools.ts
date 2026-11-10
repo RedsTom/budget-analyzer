@@ -26,14 +26,22 @@ import {
   FREQUENCY_LABELS,
   type RecurringStatus,
 } from './recurring'
-import { balanceAt, balancePoints, detailedCoverageSegments } from './runway'
-import type {
-  AliasEntry,
-  AssistantArtifact,
-  BudgetPlan,
-  CustomAllocationMap,
-  RecurringDecision,
-  Transaction,
+import {
+  balanceAt,
+  balancePoints,
+  coverageAvailability,
+  detailedCoverageSegments,
+  paymentAllocationStatuses,
+  sortLedger,
+} from './runway'
+import {
+  allocationParts,
+  type AliasEntry,
+  type AssistantArtifact,
+  type BudgetPlan,
+  type CustomAllocationMap,
+  type RecurringDecision,
+  type Transaction,
 } from './types'
 
 /* -------------------------------------------------------------------------- */
@@ -190,7 +198,7 @@ export const ASSISTANT_TOOL_DECLARATIONS = [
   {
     name: 'coverage_status',
     description:
-      'Couverture FIFO des dépenses par les crédits : quels revenus financent quoi, montant couvert et reste disponible.',
+      'Couverture manuelle des dépenses par les crédits : quels revenus financent quoi, montant couvert et reste disponible.',
     parameters: {
       type: 'OBJECT',
       properties: { limit: { type: 'INTEGER', description: 'Nombre de crédits (défaut 8, max 20).' } },
@@ -721,30 +729,41 @@ function runCoverageStatus(
   args: Record<string, unknown>,
 ): AssistantToolResult {
   const limit = asLimit(args.limit, 8, 20)
-  const segments = detailedCoverageSegments(
+  const allSegments = detailedCoverageSegments(
     context.transactions,
     context.customAllocations ?? {},
     context.aliases,
   )
-    .filter((segment) => segment.coveredAmount > 0 || segment.remaining > 0.005)
+  const balance = sortLedger(context.transactions).at(-1)?.solde ?? 0
+  const availability = coverageAvailability(allSegments, balance)
+  const remainingOf = (segment: (typeof allSegments)[number]): number =>
+    availability.availableByCredit[segment.creditId] ?? 0
+  const activeCount = allSegments.filter((segment) => remainingOf(segment) > 0.005).length
+  const paymentStatuses = paymentAllocationStatuses(
+    context.transactions,
+    context.customAllocations,
+    context.aliases,
+  )
+  const pendingPayments = paymentStatuses.filter(
+    (payment) => payment.status !== 'done',
+  ).length
+  const segments = allSegments
+    .filter((segment) => segment.coveredAmount > 0 || remainingOf(segment) > 0.005)
     .sort((a, b) => b.amount - a.amount)
     .slice(0, limit)
 
-  const totalRemaining = segments.reduce(
-    (sum, segment) => sum + Math.max(0, segment.remaining),
-    0,
-  )
-
   return {
     summary: {
-      credits_actifs: segments.length,
-      reste_disponible: round(totalRemaining),
+      credits_actifs: activeCount,
+      reste_disponible: round(availability.available),
+      deficit_absorbe: round(availability.absorbedDeficit),
+      paiements_a_traiter: pendingPayments,
       credits: segments.map((segment) => ({
         credit_id: segment.creditId,
         libelle: segment.displayName,
         montant: round(segment.amount),
         couvert: round(segment.coveredAmount),
-        restant: round(Math.max(0, segment.remaining)),
+        restant: round(remainingOf(segment)),
         couvre_jusqu_au: segment.coversUntil,
         duree_jours: segment.durationDays,
         categories_financees: Object.entries(segment.categoryTotals)
@@ -764,7 +783,7 @@ function runCoverageStatus(
                 label: segment.displayName,
                 amount: round(segment.amount),
                 covered: round(segment.coveredAmount),
-                remaining: round(Math.max(0, segment.remaining)),
+                remaining: round(remainingOf(segment)),
                 coversUntil: segment.coversUntil,
               })),
             },
@@ -781,21 +800,26 @@ function runAllocations(
   const byId = new Map(context.transactions.map((transaction) => [transaction.id, transaction]))
 
   const items = Object.entries(context.customAllocations ?? {})
-    .map(([expenseId, creditId]) => {
+    .flatMap(([expenseId, value]) => {
       const expense = byId.get(expenseId)
-      const credit = byId.get(creditId)
-      if (!expense || !credit) return null
-      return {
-        expenseId,
-        expenseLabel: shortLabel(expense, context.aliases),
-        expenseAmount: round(expense.amount),
-        creditId,
-        creditLabel: shortLabel(credit, context.aliases),
-        creditAmount: round(credit.amount),
-        date: expense.date,
-      }
+      if (!expense || expense.amount >= 0) return []
+      return allocationParts(value, -expense.amount).flatMap((part) => {
+        const credit = byId.get(part.creditId)
+        if (!credit) return []
+        return [
+          {
+            expenseId,
+            expenseLabel: shortLabel(expense, context.aliases),
+            expenseAmount: round(expense.amount),
+            creditId: part.creditId,
+            creditLabel: shortLabel(credit, context.aliases),
+            creditAmount: round(credit.amount),
+            partAmount: part.amount,
+            date: expense.date,
+          },
+        ]
+      })
     })
-    .filter((item): item is NonNullable<typeof item> => item !== null)
     .sort((a, b) => b.date.localeCompare(a.date))
     .slice(0, limit)
 
@@ -807,6 +831,7 @@ function runAllocations(
         montant_depense: item.expenseAmount,
         credit: item.creditLabel,
         montant_credit: item.creditAmount,
+        montant_part: item.partAmount,
       })),
     },
     artifacts:
@@ -822,6 +847,7 @@ function runAllocations(
                 creditId: item.creditId,
                 creditLabel: item.creditLabel,
                 creditAmount: item.creditAmount,
+                partAmount: item.partAmount,
               })),
             },
           ]

@@ -16,7 +16,12 @@ import {
 import { categoryById, categoryIdOf } from './categories'
 import type { DateRange } from './period'
 import { detectRecurring } from './recurring'
-import { balanceAt, detailedCoverageSegments, runwayProjection } from './runway'
+import {
+  balanceAt,
+  coverageAvailability,
+  detailedCoverageSegments,
+  runwayProjection,
+} from './runway'
 import type {
   AliasEntry,
   BudgetPlan,
@@ -132,8 +137,8 @@ export function buildAssistantContext(input: AssistantContextInput): AssistantCo
 
   const projection = runwayProjection(transactions, { now: new Date(`${reference}T00:00:00`) })
   const segments = detailedCoverageSegments(transactions, customAllocations, aliases)
-  const activeSegments = segments.filter((segment) => !segment.exhausted && segment.remaining > 0.005)
-  const activeFunds = activeSegments.reduce((sum, segment) => sum + segment.remaining, 0)
+  const availability = coverageAvailability(segments, projection.balance)
+  const activeFunds = availability.available
 
   return {
     periodLabel: label,

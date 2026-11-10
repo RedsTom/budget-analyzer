@@ -4,15 +4,22 @@ import { fr } from 'date-fns/locale'
 import {
   Check,
   Database,
+  Download,
   ExternalLink,
   Eye,
   EyeOff,
+  Fingerprint,
   KeyRound,
   Lock,
+  Monitor,
+  Moon,
   ShieldCheck,
   Sparkles,
+  Sun,
   Trash2,
+  Upload,
 } from 'lucide-react'
+import { useTheme } from '@/components/theme-context'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -42,15 +49,27 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { CsvImporter } from '@/components/csv-importer'
+import { InstallCard } from '@/components/pwa/install-card'
 import { PageHeader } from '@/components/page-header'
 import { testGeminiApiKey } from '@/lib/ai'
+import { aiFailureFromMessage } from '@/lib/ai-errors'
+import { guardAiOnline, notifyAiFailure } from '@/lib/ai-notify'
 import { WrongPasswordError } from '@/lib/crypto'
 import type { ParsedCsvFile } from '@/lib/csv'
 import { formatDate, formatCount } from '@/lib/format'
 import { datasetRange } from '@/lib/period'
+import {
+  getPasskeyInfo,
+  isPasskeySupported,
+  passkeyErrorMessage,
+  registerPasskey,
+  removePasskey,
+  type PasskeyInfo,
+} from '@/lib/passkey'
 import { VAULT_STORAGE_KEY } from '@/lib/storage'
+import { downloadVaultBackup, restoreVaultBackup } from '@/lib/vault-backup'
 import type { ImportSummary } from '@/lib/types'
-import { useVaultStore } from '@/store/vault-store'
+import { flushVaultWrites, useVaultStore } from '@/store/vault-store'
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} o`
@@ -71,8 +90,83 @@ export function SettingsPage() {
   const setAiApiKey = useVaultStore((state) => state.setAiApiKey)
   const importRows = useVaultStore((state) => state.importRows)
   const lastImport = useVaultStore((state) => state.lastImport)
+  const verifyPassword = useVaultStore((state) => state.verifyPassword)
 
   const [summaries, setSummaries] = useState<ImportSummary[]>([])
+  const { theme, setTheme } = useTheme()
+  const [restoring, setRestoring] = useState(false)
+  const [passkeyInfo, setPasskeyInfo] = useState<PasskeyInfo | null>(() =>
+    getPasskeyInfo(),
+  )
+  const [passkeyOpen, setPasskeyOpen] = useState(false)
+  const [passkeyPassword, setPasskeyPassword] = useState('')
+  const [passkeyError, setPasskeyError] = useState<string | null>(null)
+  const [passkeyBusy, setPasskeyBusy] = useState(false)
+  const passkeySupported = isPasskeySupported()
+
+  async function handleAddPasskey() {
+    if (passkeyBusy) return
+    if (!passkeyPassword) {
+      setPasskeyError('Saisissez votre mot de passe actuel.')
+      return
+    }
+    setPasskeyBusy(true)
+    setPasskeyError(null)
+    try {
+      const valid = await verifyPassword(passkeyPassword)
+      if (!valid) {
+        setPasskeyError('Mot de passe incorrect.')
+        return
+      }
+      const info = await registerPasskey(passkeyPassword)
+      setPasskeyInfo(info)
+      setPasskeyPassword('')
+      setPasskeyOpen(false)
+      toast.success('Clé d’accès enregistrée', {
+        description:
+          'Vous pouvez désormais déverrouiller le coffre sans saisir le mot de passe.',
+      })
+    } catch (cause) {
+      setPasskeyError(passkeyErrorMessage(cause))
+    } finally {
+      setPasskeyBusy(false)
+    }
+  }
+
+  function handleRemovePasskey() {
+    if (!window.confirm('Retirer la clé d’accès de ce coffre ? Le mot de passe restera utilisable.')) {
+      return
+    }
+    removePasskey()
+    setPasskeyInfo(null)
+    toast.success('Clé d’accès retirée', {
+      description: 'La clé reste dans votre gestionnaire, mais ne déverrouille plus ce coffre.',
+    })
+  }
+
+  async function handleRestore(file: File) {
+    if (
+      !window.confirm(
+        'Restaurer cette sauvegarde remplacera le coffre actuel. Continuer ?',
+      )
+    ) {
+      return
+    }
+    setRestoring(true)
+    try {
+      await restoreVaultBackup(file)
+      toast.success('Sauvegarde restaurée', {
+        description: 'Rechargement pour déverrouiller le coffre restauré…',
+      })
+      window.setTimeout(() => window.location.reload(), 600)
+    } catch (cause) {
+      toast.error('Restauration impossible', {
+        description: cause instanceof Error ? cause.message : 'Fichier invalide',
+      })
+    } finally {
+      setRestoring(false)
+    }
+  }
 
   const [passwordOpen, setPasswordOpen] = useState(false)
   const [apiKeyInput, setApiKeyInput] = useState(aiApiKey ?? '')
@@ -112,6 +206,7 @@ export function SettingsPage() {
       toast.error('Aucune clé API à tester')
       return
     }
+    if (!guardAiOnline(() => void handleTestAi())) return
     setTestingAi(true)
     setAiTestedOk(false)
     try {
@@ -120,6 +215,9 @@ export function SettingsPage() {
         setAiTestedOk(true)
         toast.success('Connexion à l’API Gemini réussie !')
       } else {
+        notifyAiFailure(res.failure ?? aiFailureFromMessage(res.error), () => {
+          void handleTestAi()
+        })
         toast.error('Échec du test de l’IA', { description: res.error })
       }
     } finally {
@@ -220,7 +318,7 @@ export function SettingsPage() {
                 <ShieldCheck className="size-3" />
                 Chiffré localement
               </Badge>
-              <Badge variant="outline">1 clé localStorage</Badge>
+              <Badge variant="outline">localStorage local</Badge>
             </div>
 
             <Separator />
@@ -275,12 +373,182 @@ export function SettingsPage() {
         </Card>
       </section>
 
+      <section className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Application</CardTitle>
+            <CardDescription>
+              Installation sur l’appareil et apparence. L’application peut être
+              épinglée à l’écran d’accueil et fonctionne hors ligne.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Apparence</p>
+              <div className="grid grid-cols-3 gap-2">
+                <Button
+                  variant={theme === 'light' ? 'secondary' : 'outline'}
+                  size="sm"
+                  onClick={() => setTheme('light')}
+                >
+                  <Sun className="size-3.5" />
+                  Clair
+                </Button>
+                <Button
+                  variant={theme === 'dark' ? 'secondary' : 'outline'}
+                  size="sm"
+                  onClick={() => setTheme('dark')}
+                >
+                  <Moon className="size-3.5" />
+                  Sombre
+                </Button>
+                <Button
+                  variant={theme === 'system' ? 'secondary' : 'outline'}
+                  size="sm"
+                  onClick={() => setTheme('system')}
+                >
+                  <Monitor className="size-3.5" />
+                  Système
+                </Button>
+              </div>
+            </div>
+
+            <Separator />
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Installation</p>
+              <InstallCard />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Sauvegarde du coffre</CardTitle>
+            <CardDescription>
+              Exportez l’enveloppe chiffrée telle quelle. Sans votre mot de passe,
+              elle reste illisible. Utile avant de changer d’appareil.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      await flushVaultWrites()
+                      downloadVaultBackup()
+                      toast.success('Sauvegarde téléchargée')
+                    } catch (cause) {
+                      toast.error(
+                        cause instanceof Error ? cause.message : 'Export impossible',
+                      )
+                    }
+                  })()
+                }}
+              >
+                <Download className="size-3.5" />
+                Exporter le coffre chiffré
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={restoring}
+                onClick={() => document.getElementById('vault-restore-input')?.click()}
+              >
+                <Upload className="size-3.5" />
+                {restoring ? 'Restauration…' : 'Restaurer une sauvegarde'}
+              </Button>
+              <input
+                id="vault-restore-input"
+                type="file"
+                accept="application/json,.json"
+                className="sr-only"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (file) void handleRestore(file)
+                }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              La restauration remplace le coffre actuel après confirmation. Le mot
+              de passe d’origine reste nécessaire pour l’ouvrir.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Fingerprint className="size-4" />
+              Clé d’accès
+            </CardTitle>
+            <CardDescription>
+              Déverrouillez le coffre avec Face ID, Touch ID, Windows Hello ou votre
+              gestionnaire de clés. Le mot de passe reste utilisable en secours.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {passkeyInfo ? (
+              <>
+                <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+                  <p className="font-medium">Clé configurée</p>
+                  <p className="text-xs text-muted-foreground">
+                    {passkeyInfo.label} · enregistrée le{' '}
+                    {format(new Date(passkeyInfo.createdAt), 'd MMMM yyyy à HH:mm', {
+                      locale: fr,
+                    })}
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={handleRemovePasskey}>
+                  <Trash2 className="size-3.5" />
+                  Retirer la clé d’accès
+                </Button>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Aucune clé d’accès n’est enregistrée sur cet appareil.
+                </p>
+                <Button
+                  size="sm"
+                  disabled={!passkeySupported}
+                  onClick={() => {
+                    setPasskeyError(null)
+                    setPasskeyPassword('')
+                    setPasskeyOpen(true)
+                  }}
+                >
+                  <Fingerprint className="size-3.5" />
+                  Ajouter une clé d’accès
+                </Button>
+                {!passkeySupported ? (
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    Ce navigateur ne prend pas en charge les clés d’accès WebAuthn.
+                  </p>
+                ) : null}
+              </>
+            )}
+            <p className="text-xs text-muted-foreground">
+              La clé d’accès scelle votre mot de passe avec le secret PRF du
+              gestionnaire. Sans mot de passe ni clé, le coffre reste irrécupérable.
+              Elle est propre à cet appareil et n’est pas incluse dans l’export.
+            </p>
+          </CardContent>
+        </Card>
+      </section>
+
       <Alert>
         <ShieldCheck />
-        <AlertTitle>Aucune récupération de mot de passe</AlertTitle>
+        <AlertTitle>Récupération limitée</AlertTitle>
         <AlertDescription>
-          Le mot de passe n’est jamais stocké, même chiffré. S’il est perdu, le contenu
-          du coffre est définitivement illisible. Pensez à exporter vos relevés d’origine.
+          Le mot de passe n’est jamais stocké en clair. Sans clé d’accès, s’il est
+          perdu, le coffre est définitivement illisible. Avec une clé d’accès, elle
+          peut déverrouiller le coffre sur cet appareil, mais elle ne remplace pas
+          une sauvegarde chiffrée.
         </AlertDescription>
       </Alert>
 
@@ -454,7 +722,78 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
-      <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
+      <Dialog
+        open={passkeyOpen}
+        onOpenChange={(open) => {
+          setPasskeyOpen(open)
+          if (!open) {
+            setPasskeyPassword('')
+            setPasskeyError(null)
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Fingerprint className="size-4" />
+              Ajouter une clé d’accès
+            </DialogTitle>
+            <DialogDescription>
+              Votre mot de passe actuel est nécessaire une seule fois pour sceller
+              le coffre avec la clé. Il restera utilisable en secours.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label htmlFor="passkey-password">Mot de passe actuel</Label>
+            <Input
+              id="passkey-password"
+              type="password"
+              autoComplete="current-password"
+              autoFocus
+              value={passkeyPassword}
+              onChange={(event) => {
+                setPasskeyPassword(event.target.value)
+                setPasskeyError(null)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void handleAddPasskey()
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              Le navigateur affichera ensuite la fenêtre de création de la clé
+              d’accès (Face ID, Touch ID, Windows Hello ou gestionnaire de clés).
+            </p>
+          </div>
+
+          {passkeyError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {passkeyError}
+            </p>
+          ) : null}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setPasskeyOpen(false)}
+              disabled={passkeyBusy}
+            >
+              Annuler
+            </Button>
+            <Button onClick={() => void handleAddPasskey()} disabled={passkeyBusy}>
+              {passkeyBusy ? 'Configuration…' : 'Configurer la clé'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ChangePasswordDialog
+        open={passwordOpen}
+        onOpenChange={(open) => {
+          setPasswordOpen(open)
+          if (!open) setPasskeyInfo(getPasskeyInfo())
+        }}
+      />
     </div>
   )
 }
@@ -493,9 +832,12 @@ function ChangePasswordDialog({
 
     setSubmitting(true)
     try {
+      const passkeyWasConfigured = getPasskeyInfo() !== null
       await changePassword(current, next)
       toast.success('Mot de passe modifié', {
-        description: 'Le coffre a été rechiffré avec une nouvelle clé.',
+        description: passkeyWasConfigured
+          ? 'Le coffre a été rechiffré. La clé d’accès a été retirée : réenregistrez-la depuis les réglages.'
+          : 'Le coffre a été rechiffré avec une nouvelle clé.',
       })
       resetFields()
       onOpenChange(false)

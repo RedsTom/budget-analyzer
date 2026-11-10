@@ -20,6 +20,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { CategoryBadge } from '@/components/category-badge'
+import { DataList, DataListRow } from '@/components/data-list'
 import { MerchantDialog } from '@/components/merchant-dialog'
 import { PageHeader } from '@/components/page-header'
 import { SortableHeader } from '@/components/sortable-header'
@@ -136,7 +137,7 @@ export function TransactionsPage() {
   const hasFilters =
     Boolean(search) || Boolean(merchantFilter) || Boolean(categoryFilter) || typeFilter !== 'all'
 
-  function exportCsv() {
+  async function exportCsv() {
     const header = [
       'Date',
       'Date de valeur',
@@ -164,11 +165,31 @@ export function TransactionsPage() {
     )
 
     const csv = `\uFEFF${[header.join(';'), ...lines].join('\r\n')}`
+    const fileName = `transactions-${range.start}-${range.end}.csv`
+    const file = new File([csv], fileName, { type: 'text/csv;charset=utf-8' })
+
+    // Sur mobile, la feuille de partage native est plus fiable que `download`.
+    if (
+      typeof navigator.share === 'function' &&
+      typeof navigator.canShare === 'function' &&
+      navigator.canShare({ files: [file] })
+    ) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: 'Transactions Budget Analyzer',
+        })
+        return
+      } catch (cause) {
+        if (cause instanceof DOMException && cause.name === 'AbortError') return
+      }
+    }
+
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = `transactions-${range.start}-${range.end}.csv`
+    anchor.download = fileName
     anchor.click()
     URL.revokeObjectURL(url)
   }
@@ -179,7 +200,12 @@ export function TransactionsPage() {
         title="Transactions"
         description={`${label} · ${formatCount(scoped.length)} mouvements`}
         actions={
-          <Button variant="outline" size="sm" onClick={exportCsv} disabled={filtered.length === 0}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void exportCsv()}
+            disabled={filtered.length === 0}
+          >
             <Download className="size-3.5" />
             Exporter en CSV
           </Button>
@@ -239,12 +265,12 @@ export function TransactionsPage() {
                   className="pl-8"
                 />
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
                 <Select
                   value={typeFilter}
                   onValueChange={(value) => setTypeFilter(value as typeof typeFilter)}
                 >
-                  <SelectTrigger size="sm" className="w-[130px]">
+                  <SelectTrigger size="sm" className="w-full sm:w-[130px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -260,7 +286,7 @@ export function TransactionsPage() {
                     setCategoryFilter(value === 'all' ? null : (value as typeof categoryFilter))
                   }
                 >
-                  <SelectTrigger size="sm" className="w-[180px]">
+                  <SelectTrigger size="sm" className="w-full sm:w-[180px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -299,7 +325,41 @@ export function TransactionsPage() {
           </div>
         </CardHeader>
         <CardContent className="px-0">
-          <div className="overflow-x-auto border-t">
+          <DataList className="md:hidden">
+            {filtered.length === 0 ? (
+              <p className="px-4 py-10 text-center text-sm text-muted-foreground">
+                Aucun mouvement ne correspond à ces filtres.
+              </p>
+            ) : (
+              filtered.slice(0, visible).map((transaction) => {
+                const name = resolveDisplayName(transaction, aliases)
+                return (
+                  <DataListRow
+                    key={transaction.id}
+                    primary={name}
+                    secondary={transaction.rawLabel}
+                    meta={
+                      <span className="text-xs text-muted-foreground">
+                        {formatDate(transaction.date)}
+                      </span>
+                    }
+                    amount={formatSignedAmount(transaction.amount)}
+                    amountClassName={
+                      transaction.amount < 0
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                    }
+                    onClick={() =>
+                      openDetail({ kind: 'transaction', id: transaction.id })
+                    }
+                    ariaLabel={`Ouvrir ${name}`}
+                  />
+                )
+              })
+            )}
+          </DataList>
+
+          <div className="hidden overflow-x-auto border-t md:block">
             <Table>
               <TableHeader>
                 <TableRow>

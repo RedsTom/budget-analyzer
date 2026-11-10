@@ -121,13 +121,75 @@
   * {
     @apply border-border outline-ring/50;
     }
+  html {
+    @apply font-sans;
+    color-scheme: light;
+    -webkit-tap-highlight-color: transparent;
+    }
+  html.dark {
+    color-scheme: dark;
+    }
   body {
     @apply bg-background text-foreground;
+    overscroll-behavior-y: none;
     }
   button:not(:disabled), [role="button"]:not(:disabled) {
     cursor: pointer;
+    touch-action: manipulation;
     }
-  html {
-    @apply font-sans;
+  input, textarea, select {
+    -webkit-tap-highlight-color: transparent;
     }
+}
+
+/* Radix garde parfois le portail dans le DOM après l'animation de sortie
+   (animationend non reçu). Un état fermé ne doit jamais intercepter les clics. */
+[data-slot="sheet-content"][data-state="closed"],
+[data-slot="sheet-overlay"][data-state="closed"],
+[data-slot="dialog-content"][data-state="closed"],
+[data-slot="dialog-overlay"][data-state="closed"] {
+  display: none;
+}
+
+@layer utilities {
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pl-safe {
+    padding-left: env(safe-area-inset-left);
+  }
+  .pr-safe {
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+/* iOS zoome automatiquement sur les champs dont la police est < 16 px. */
+@media (max-width: 767px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+
+  /* Cibles tactiles minimales, sans agrandir les micro-boutons des champs. */
+  [data-slot="button"]:not([data-size="icon-xs"]) {
+    min-height: 2.5rem;
+  }
+  [data-slot="button"][data-size^="icon"]:not([data-size="icon-xs"]) {
+    min-width: 2.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

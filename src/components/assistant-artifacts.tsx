@@ -208,6 +208,7 @@ function CategoriesArtifact({
                   outerRadius={58}
                   paddingAngle={2}
                   strokeWidth={0}
+                  isAnimationActive={false}
                 >
                   {artifact.items.map((item) => (
                     <Cell key={item.id} fill={item.color} />
@@ -287,8 +288,18 @@ function MonthlyArtifact({
               ]}
             />
             <ReferenceLine y={0} stroke="var(--color-muted-foreground)" />
-            <Bar dataKey="income" fill="#10b981" radius={[3, 3, 0, 0]} />
-            <Bar dataKey="expenses" fill="#f43f5e" radius={[3, 3, 0, 0]} />
+            <Bar
+              dataKey="income"
+              fill="#10b981"
+              radius={[3, 3, 0, 0]}
+              isAnimationActive={false}
+            />
+            <Bar
+              dataKey="expenses"
+              fill="#f43f5e"
+              radius={[3, 3, 0, 0]}
+              isAnimationActive={false}
+            />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -511,7 +522,7 @@ function AllocationsArtifact({
       ) : (
         <ul className="divide-y">
           {artifact.items.map((item) => (
-            <li key={item.expenseId}>
+            <li key={`${item.expenseId}:${item.creditId}`}>
               <button
                 type="button"
                 onClick={() => openDetail({ kind: 'transaction', id: item.expenseId })}
@@ -524,7 +535,7 @@ function AllocationsArtifact({
                   </p>
                 </div>
                 <span className="shrink-0 text-sm font-medium tabular-nums">
-                  {formatAmount(Math.abs(item.expenseAmount))}
+                  {formatAmount(item.partAmount ?? Math.abs(item.expenseAmount))}
                 </span>
                 <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
               </button>

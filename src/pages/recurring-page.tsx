@@ -31,6 +31,7 @@ import { CategoryBadge } from '@/components/category-badge'
 import { MerchantDialog } from '@/components/merchant-dialog'
 import { PageHeader } from '@/components/page-header'
 import { StatCard } from '@/components/stat-card'
+import { usePeriod } from '@/hooks/use-period'
 import {
   formatAmount,
   formatDate,
@@ -41,12 +42,15 @@ import {
   detectRecurring,
   FREQUENCY_LABELS,
   recurringSummary,
+  seriesInRange,
   type RecurrenceFrequency,
   type RecurringSeries,
   type RecurringStatus,
 } from '@/lib/recurring'
 import { referenceDate } from '@/lib/period'
 import { batchAnalyzeRecurring } from '@/lib/ai'
+import { aiFailureFromMessage } from '@/lib/ai-errors'
+import { guardAiOnline, notifyAiFailure } from '@/lib/ai-notify'
 import { useVaultStore } from '@/store/vault-store'
 import { useUiStore } from '@/store/ui-store'
 
@@ -85,6 +89,7 @@ export function RecurringPage() {
   const includeInactive = useUiStore((state) => state.includeInactiveRecurring)
   const setIncludeInactive = useUiStore((state) => state.setIncludeInactiveRecurring)
   const openDetail = useUiStore((state) => state.openDetail)
+  const { range } = usePeriod()
 
   const [direction, setDirection] = useState<'expense' | 'income'>('expense')
   const [search, setSearch] = useState('')
@@ -98,7 +103,7 @@ export function RecurringPage() {
 
   const [aiProcessing, setAiProcessing] = useState(false)
 
-  const series = useMemo(
+  const allSeries = useMemo(
     () =>
       detectRecurring(transactions, {
         reference: referenceDate(transactions),
@@ -107,6 +112,9 @@ export function RecurringPage() {
       }),
     [transactions, recurringDecisions, aliases],
   )
+
+  // La détection reste globale ; la période filtre les séries affichées.
+  const series = useMemo(() => seriesInRange(allSeries, range), [allSeries, range])
 
   const summary = useMemo(() => recurringSummary(series), [series])
 
@@ -164,6 +172,7 @@ export function RecurringPage() {
       toast.info("Aucune série en attente pour l'analyse IA")
       return
     }
+    if (!guardAiOnline(() => void handleAiSuggestions())) return
 
     setAiProcessing(true)
     try {
@@ -178,6 +187,10 @@ export function RecurringPage() {
       // Lancer le batch IA (classification accept/refuser)
       const results = await batchAnalyzeRecurring(items, aiApiKey)
       if (!results.ok) {
+        notifyAiFailure(
+          results.failure ?? aiFailureFromMessage(results.error),
+          () => void handleAiSuggestions(),
+        )
         toast.error('Analyse impossible', { description: results.error })
         return
       }
@@ -236,7 +249,7 @@ export function RecurringPage() {
     <div className="space-y-6">
       <PageHeader
         title="Récurrences"
-        description="Paiements et revenus détectés automatiquement : abonnements, loyers, salaires, virements réguliers."
+        description="Paiements et revenus détectés automatiquement sur la période sélectionnée : abonnements, loyers, salaires, virements réguliers."
         actions={
           <>
             {summary.pendingCount > 0 ? (
@@ -372,7 +385,7 @@ export function RecurringPage() {
                   value={status}
                   onValueChange={(value) => setStatus(value as StatusFilter)}
                 >
-                  <SelectTrigger size="sm" className="w-[170px]">
+                  <SelectTrigger size="sm" className="w-full sm:w-[170px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -392,7 +405,7 @@ export function RecurringPage() {
                   value={frequency}
                   onValueChange={(value) => setFrequency(value as typeof frequency)}
                 >
-                  <SelectTrigger size="sm" className="w-[160px]">
+                  <SelectTrigger size="sm" className="w-full sm:w-[160px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -566,7 +579,7 @@ function SeriesRow({
                 variant="ghost"
                 size="icon-sm"
                 aria-label="Accepter la série"
-                className="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400"
+                className="size-10 text-emerald-600 hover:text-emerald-700 md:size-7 dark:text-emerald-400"
                 onClick={() => onDecide('accepted')}
               >
                 <Check className="size-4" />
@@ -575,7 +588,7 @@ function SeriesRow({
                 variant="ghost"
                 size="icon-sm"
                 aria-label="Refuser la série"
-                className="text-rose-600 hover:text-rose-700 dark:text-rose-400"
+                className="size-10 text-rose-600 hover:text-rose-700 md:size-7 dark:text-rose-400"
                 onClick={() => onDecide('refused')}
               >
                 <X className="size-4" />
@@ -585,18 +598,26 @@ function SeriesRow({
             <Button
               variant="ghost"
               size="icon-sm"
+              className="size-10 md:size-7"
               aria-label="Remettre en attente"
               onClick={() => onDecide(null)}
             >
               <RotateCcw className="size-3.5" />
             </Button>
           )}
-          <Button variant="ghost" size="icon-sm" aria-label="Modifier le marchand" onClick={onEdit}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="size-10 md:size-7"
+            aria-label="Modifier le marchand"
+            onClick={onEdit}
+          >
             <Pencil className="size-3.5" />
           </Button>
           <Button
             variant="ghost"
             size="icon-sm"
+            className="size-10 md:size-7"
             aria-label="Voir les paiements associés"
             onClick={onOpen}
           >

@@ -50,8 +50,81 @@ export interface BudgetPlan {
   color?: string
 }
 
-/** Affectation manuelle d'une dépense à un crédit spécifique (expenseId -> creditId). */
-export type CustomAllocationMap = Record<string, string>
+/**
+ * Affectation manuelle d'une dépense à un crédit.
+ * Une chaîne signifie « toute la dépense » ; un objet permet de plafonner la
+ * part manuelle quand la dépense doit être fractionnée.
+ */
+export interface CustomAllocation {
+  creditId: string
+  /** Part maximale affectée à ce crédit ; absente = montant total de la dépense. */
+  amount?: number
+}
+
+export interface CustomAllocationPart {
+  creditId: string
+  amount: number
+}
+
+export type CustomAllocationValue =
+  | string
+  | CustomAllocation
+  | CustomAllocationPart[]
+
+/** Affectation manuelle d'une dépense, éventuellement répartie sur plusieurs crédits. */
+export type CustomAllocationMap = Record<string, CustomAllocationValue>
+
+export function allocationCreditId(
+  value: CustomAllocationValue | undefined,
+): string | null {
+  if (!value) return null
+  if (Array.isArray(value)) return value[0]?.creditId ?? null
+  return typeof value === 'string' ? value : value.creditId
+}
+
+export function allocationCap(
+  value: CustomAllocationValue | undefined,
+): number | null {
+  if (!value || Array.isArray(value) || typeof value === 'string') return null
+  return value.amount ?? null
+}
+
+/**
+ * Normalise une affectation (ancien format chaîne/objet ou nouveau tableau)
+ * en parts positives, fusionnées par crédit et plafonnées au montant dépensé.
+ */
+export function allocationParts(
+  value: CustomAllocationValue | undefined,
+  totalExpense: number,
+): CustomAllocationPart[] {
+  if (!value || totalExpense <= 0) return []
+  const raw: CustomAllocationPart[] = Array.isArray(value)
+    ? value
+    : [
+        {
+          creditId: typeof value === 'string' ? value : value.creditId,
+          amount:
+            typeof value === 'string'
+              ? totalExpense
+              : Math.min(totalExpense, Math.max(0, value.amount ?? totalExpense)),
+        },
+      ]
+
+  const merged = new Map<string, number>()
+  let left = totalExpense
+  for (const part of raw) {
+    if (!part.creditId || !Number.isFinite(part.amount)) continue
+    const amount = Math.min(left, Math.max(0, part.amount))
+    if (amount <= 0.005) continue
+    merged.set(part.creditId, (merged.get(part.creditId) ?? 0) + amount)
+    left = Math.round((left - amount) * 100) / 100
+    if (left <= 0.005) break
+  }
+  return [...merged.entries()].map(([creditId, amount]) => ({
+    creditId,
+    amount: Math.round(amount * 100) / 100,
+  }))
+}
 
 /** Décision explicite de l'utilisateur ; l'absence de décision = en attente. */
 export type RecurringDecision = 'accepted' | 'refused'
@@ -129,6 +202,8 @@ export type AssistantArtifact =
         creditId: string
         creditLabel: string
         creditAmount: number
+        /** Part de la dépense affectée à ce crédit (fractionnement). */
+        partAmount?: number
       }[]
     }
 

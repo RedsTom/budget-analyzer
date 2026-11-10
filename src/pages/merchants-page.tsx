@@ -30,6 +30,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { CategoryBadge } from '@/components/category-badge'
+import { DataList, DataListRow } from '@/components/data-list'
 import { MerchantDialog } from '@/components/merchant-dialog'
 import { PageHeader } from '@/components/page-header'
 import { SortableHeader } from '@/components/sortable-header'
@@ -37,6 +38,8 @@ import { usePeriod } from '@/hooks/use-period'
 import { merchantStats, type MerchantStat } from '@/lib/analytics'
 import { CATEGORIES, categoryById } from '@/lib/categories'
 import { batchSuggestMerchantCategories, batchSuggestMerchantNames } from '@/lib/ai'
+import { aiFailureFromMessage } from '@/lib/ai-errors'
+import { guardAiOnline, notifyAiFailure } from '@/lib/ai-notify'
 import { formatAmount, formatCount, formatDate, formatSignedAmount } from '@/lib/format'
 import {
   nextSort,
@@ -158,6 +161,7 @@ export function MerchantsPage() {
       })
       return
     }
+    if (!guardAiOnline(() => void handleBatchRenameMerchants())) return
 
     const candidates = filtered.length > 0 ? filtered : stats
     if (candidates.length === 0) return
@@ -176,6 +180,10 @@ export function MerchantsPage() {
       // Appel groupé (15 marchands par requête, géré par la fonction).
       const result = await batchSuggestMerchantNames(items, aiApiKey)
       if (!result.ok) {
+        notifyAiFailure(
+          result.failure ?? aiFailureFromMessage(result.error),
+          () => void handleBatchRenameMerchants(),
+        )
         toast.error('Suggestion impossible', { description: result.error })
         return
       }
@@ -210,6 +218,7 @@ export function MerchantsPage() {
       })
       return
     }
+    if (!guardAiOnline(() => void handleBatchCategorize())) return
 
     const pool = filtered.length > 0 ? filtered : stats
     const candidates = pool.filter((stat) => !aliases[stat.merchantKey]?.categoryId)
@@ -230,6 +239,10 @@ export function MerchantsPage() {
       }))
       const result = await batchSuggestMerchantCategories(items, aiApiKey)
       if (!result.ok) {
+        notifyAiFailure(
+          result.failure ?? aiFailureFromMessage(result.error),
+          () => void handleBatchCategorize(),
+        )
         toast.error('Catégorisation impossible', { description: result.error })
         return
       }
@@ -341,7 +354,7 @@ export function MerchantsPage() {
               />
             </div>
             <Select value={categoryFilter} onValueChange={(value) => setCategoryFilter(value)}>
-              <SelectTrigger size="sm" className="w-[180px]">
+              <SelectTrigger size="sm" className="w-full sm:w-[180px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -393,7 +406,29 @@ export function MerchantsPage() {
           </div>
         </CardHeader>
         <CardContent className="px-0">
-          <div className="overflow-x-auto border-t">
+          <DataList className="md:hidden">
+            {filtered.length === 0 ? (
+              <p className="px-4 py-10 text-center text-sm text-muted-foreground">
+                Aucun marchand ne correspond à cette recherche.
+              </p>
+            ) : (
+              filtered.slice(0, visible).map((stat) => (
+                <DataListRow
+                  key={stat.merchantKey}
+                  primary={stat.label}
+                  secondary={stat.merchantKey}
+                  meta={<CategoryBadge categoryId={stat.categoryId} />}
+                  amount={formatAmount(stat.volume)}
+                  onClick={() =>
+                    openDetail({ kind: 'merchant', merchantKey: stat.merchantKey })
+                  }
+                  ariaLabel={`Ouvrir ${stat.label}`}
+                />
+              ))
+            )}
+          </DataList>
+
+          <div className="hidden overflow-x-auto border-t md:block">
             <Table>
               <TableHeader>
                 <TableRow>

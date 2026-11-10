@@ -2,11 +2,11 @@
 
 **Analysez vos relevés bancaires sans jamais les envoyer nulle part.**
 
-Application web locale qui transforme des exports CSV bancaires en tableau de
-bord budgétaire complet : import et dédoublonnage, coffre chiffré dans le
-navigateur, timeline de solde, couverture des dépenses par les revenus,
-budgets, détection des paiements récurrents et assistant conversationnel
-facultatif.
+Application web locale, installable et utilisable hors ligne, qui transforme
+des exports CSV bancaires en tableau de bord budgétaire complet : import et
+dédoublonnage, coffre chiffré dans le navigateur, timeline de solde,
+couverture des dépenses par les revenus, budgets, détection des paiements
+récurrents et assistant conversationnel facultatif.
 
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -53,9 +53,11 @@ facultatif.
   de passe par PBKDF2-SHA256 (310 000 itérations, sel aléatoire, IV neuf à
   chaque écriture).
 - **Verrouillage** manuel ou fermeture de l'onglet : la clé ne vit qu'en
-  mémoire, le mot de passe n'est jamais stocké.
-- Onboarding en trois étapes : mot de passe → premier relevé (facultatif) →
-  IA (opt-in).
+  mémoire. Le mot de passe n'est jamais stocké en clair ; si une clé d'accès
+  est configurée, une copie chiffrée par son secret PRF est conservée pour le
+  déverrouillage.
+- Onboarding en trois étapes : mot de passe (+ clé d'accès facultative) →
+  premier relevé (facultatif) → IA (opt-in).
 
 ### Analyse budgétaire
 
@@ -74,10 +76,42 @@ facultatif.
   prochaine échéance au jour ouvré, équivalent mensuel). Chaque série doit être
   **acceptée** avant de compter dans les totaux ; refusées et terminées sont
   masquées par défaut.
-- **Couverture FIFO** : jusqu'à quand chaque crédit finance les dépenses
-  suivantes, avec réaffectation manuelle d'une dépense à un autre revenu.
-- **Saisie manuelle** de dépenses et recettes, avec propagation du décalage de
-  solde aux opérations suivantes (jamais de rupture de chaîne).
+- **Traitement manuel des paiements** : plus de classement automatique. Chaque
+  paiement de la période (y compris les virements) est traité un par un, du plus
+  récent au plus ancien par défaut, avec une file de travail, un état à traiter /
+  partiel / traité, et une affectation à un ou plusieurs revenus. Les revenus
+  sont triés par proximité temporelle avec le paiement — avant comme après — et
+  toutes les entrées restent accessibles. Le budget de la catégorie est affiché
+  pour les mois autour de la date. Une affectation complète passe
+  automatiquement au paiement suivant. Un revenu postérieur est autorisé pour
+  gérer un découvert. Un solde négatif antérieur est absorbé par les crédits
+  actifs les plus anciens pour que les fonds affichés restent cohérents avec le
+  compte.
+- **Saisie rapide** de dépenses et recettes depuis le bouton central « + » ou
+  la page Saisie manuelle : type, montant, libellé unique, catégorie pleine
+  largeur, date et note optionnelle. Le solde et la couverture sont recalculés
+  sans rupture de chaîne.
+
+### Application mobile et hors ligne
+
+- **PWA installable** : manifest, icônes, service worker, lancement en mode
+  standalone et mise à jour contrôlée. Le service worker ne met en cache que
+  les assets statiques, jamais le coffre ni les requêtes IA.
+- **Hors ligne complet** pour les fonctions locales : déverrouillage, import,
+  analyses, budgets, récurrences, couverture, saisie manuelle et réglages.
+- **Navigation mobile** : barre d’onglets basse Accueil / Transactions / + /
+  Budgets / Plus, bouton central pour ajouter une dépense, feuille « Plus »,
+  période en feuille inférieure, listes tactiles à la place des tableaux,
+  panneau de détail plein écran et dialogues en feuilles inférieures.
+- **IA explicitement en ligne** : hors réseau, une popup explique que
+  l’assistant nécessite une connexion et que le reste de l’application reste
+  disponible. Aucun appel réseau n’est tenté.
+- **Sauvegarde du coffre** : export/restauration de l’enveloppe chiffrée,
+  écran de récupération si le coffre est illisible, file d’écriture sérialisée.
+- **Clé d’accès (passkey)** : déverrouillage par Face ID, Touch ID, Windows
+  Hello ou gestionnaire de clés, via l’extension WebAuthn PRF. Le mot de passe
+  reste le secours ; la clé est propre à l’appareil et n’est pas incluse dans
+  l’export.
 
 ### Organisation
 
@@ -98,7 +132,8 @@ facultatif.
 | Opérations, alias, budgets, récurrences, conversation | Coffre chiffré `budget.vault.v1` (`localStorage`) |
 | Clé dérivée | Mémoire uniquement, effacée au verrouillage |
 | Clé API de l'assistant (si activé) | Dans le coffre chiffré |
-| Mot de passe | Nulle part |
+| Clé d'accès (si configurée) | `budget.passkey.v1` : mot de passe scellé par le secret PRF de la passkey |
+| Mot de passe | Jamais en clair ; scellé par la clé d'accès si elle est configurée |
 
 - Pas de backend, pas de compte, pas d'analytics. Le build est 100 % statique.
 - **Aucune récupération de mot de passe possible** : mot de passe perdu =
@@ -122,8 +157,18 @@ npm run dev
 Ouvrez l'URL affichée (`http://localhost:5173`), créez un mot de passe, puis
 importez un relevé.
 
-**Ne pas ouvrir `dist/index.html` en `file://`** : WebCrypto et les modules ES y
-sont bloqués.
+Pour tester la PWA et le service worker :
+
+```bash
+npm run build
+npm run preview
+```
+
+Le service worker n’est pas activé dans `npm run dev`. Il exige HTTPS ou
+`localhost`. Pour GitHub Pages, définir `VITE_BASE=/budget-analyzer/` au build.
+
+**Ne pas ouvrir `dist/index.html` en `file://`** : WebCrypto, les modules ES et
+le service worker y sont bloqués.
 
 ## 📥 Importer un relevé
 
@@ -171,21 +216,29 @@ flowchart LR
   B --> C[Dédoublonnage SHA-256]
   C --> D[(Coffre chiffré<br/>AES-256-GCM<br/>localStorage)]
   D --> E[Analyses et graphiques]
-  D --> F[Budgets · récurrences<br/>couverture FIFO]
+  D --> F[Budgets · récurrences<br/>couverture manuelle]
   D -. opt-in .-> G[Assistant IA]
 ```
 
 ```
 src/
+  app/         routes.tsx — registry des pages, lazy loading et navigation
   lib/         csv, dedupe, crypto, labels, runway, analytics, categories,
-               recurring, period, ai, assistant-tools, markdown, router…
+               recurring, period, ai, ai-errors, ai-notify, connectivity,
+               persist-queue, manual-ledger, storage, vault-backup, passkey,
+               assistant-tools, markdown, router…
   store/       vault-store (données chiffrées) · ui-store (période globale,
-               filtres, panneau de détail)
-  hooks/       use-period
+               filtres, panneau de détail) · ai-notice-store
+  hooks/       use-period, use-online, use-media-query
   pages/       overview, analysis, budgets, assistant, transactions,
                recurring, merchants, coverage, manual-entry, settings
-  components/  app-shell, balance-timeline, csv-importer, detail-panel,
-               entity-panels, assistant-artifacts, ui/ (shadcn)
+  components/  app-shell, mobile-tab-bar, period-picker, data-list,
+               quick-transaction-sheet, payment-allocation-dialog,
+               ai-notice-dialog, theme-provider,
+               vault-recovery-screen, pwa/ (update-prompt, install-card),
+               balance-timeline,
+               csv-importer, detail-panel, entity-panels,
+               assistant-artifacts, ui/ (shadcn)
 ```
 
 Navigation par hash, sans serveur : `#/overview`, `#/analysis`, `#/budgets`,
@@ -206,13 +259,15 @@ modélisation) sont documentées dans [`AGENTS.md`](AGENTS.md).
 | `npm run test:watch` | Tests en surveillance |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | TypeScript seul |
+| `npm run pwa:assets` | Régénère les icônes PWA depuis `public/app-icon.svg` |
 
 Ordre de vérification avant de livrer :
 `npm run lint && npm run test && npm run build`.
 
 ## 🧪 Tests
 
-Vitest, environnement `node`, 11 fichiers dans `src/lib/`.
+Vitest, environnement `node`, tests dans `src/lib/` (dont file d’écriture,
+grand livre manuel, erreurs IA et récupération du coffre).
 
 ```bash
 npm run test
@@ -229,16 +284,24 @@ npm run test
 ```
 
 Couverture principale : parsing CSV, dédoublonnage, crypto (aller-retour, IV,
-mauvais mot de passe), périodes, analytique, récurrences, runway FIFO,
+mauvais mot de passe), périodes, analytique, récurrences, couverture manuelle,
 assistant (outils et boucle de function calling), prompts IA.
 
 ## ⚠️ Limites connues
 
 - Mono-utilisateur et mono-coffre ; quota `localStorage` ≈ 5 Mo (largement
-  suffisant pour plusieurs milliers d'opérations).
+  suffisant pour plusieurs milliers d’opérations).
 - Interface en français, devise EUR, locale `fr-FR`.
-- Pas de synchronisation bancaire : l'import se fait par fichier CSV.
+- Pas de synchronisation bancaire : l’import se fait par fichier CSV.
 - Pas de récupération de mot de passe, par choix de sécurité.
+- La clé d’accès dépend du gestionnaire de clés et de la prise en charge de
+  WebAuthn PRF ; si elle n’est pas disponible, le mot de passe reste la méthode
+  d’accès. Elle ne remplace pas une sauvegarde du coffre.
+- L’IA nécessite Internet ; le reste de l’application fonctionne hors ligne.
+- Pas de notifications push : elles exigeraient un serveur, incompatible avec
+  le fonctionnement 100 % local.
+- Sur iOS, l’installation passe par Safari → Partager → « Sur l’écran
+  d’accueil ». Pensez à exporter régulièrement le coffre chiffré.
 
 ## 📄 Licence
 

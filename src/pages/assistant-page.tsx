@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { usePeriod } from '@/hooks/use-period'
 import { askAssistantWithTools } from '@/lib/ai'
+import { aiFailureFromMessage } from '@/lib/ai-errors'
+import { guardAiOnline, notifyAiFailure } from '@/lib/ai-notify'
 import type { AssistantToolContext } from '@/lib/assistant-tools'
 import { parseAssistantMarkdown, type InlineToken } from '@/lib/markdown'
 import { navigate } from '@/lib/router'
@@ -159,6 +161,7 @@ export function AssistantPage() {
   async function ask(text: string) {
     const trimmed = text.trim()
     if (!trimmed || loading) return
+    if (!guardAiOnline(() => void ask(trimmed))) return
 
     setError(null)
     setQuestion('')
@@ -185,6 +188,10 @@ export function AssistantPage() {
     setPending(null)
 
     if (!result.ok) {
+      notifyAiFailure(
+        result.failure ?? aiFailureFromMessage(result.error),
+        () => void ask(trimmed),
+      )
       setError(result.error)
       return
     }

@@ -11,16 +11,43 @@ function getStorage(): Storage | null {
   }
 }
 
-export function readEnvelope(): EncryptedEnvelope | null {
-  const storage = getStorage()
-  if (!storage) return null
+export type VaultInspection =
+  | { status: 'missing' }
+  | { status: 'valid'; envelope: EncryptedEnvelope }
+  | { status: 'corrupted'; raw: string }
 
-  const raw = storage.getItem(VAULT_STORAGE_KEY)
-  if (!raw) return null
+/** Distingue l'absence d'un coffre d'un coffre présent mais illisible. */
+export function inspectEnvelope(): VaultInspection {
+  const storage = getStorage()
+  if (!storage) return { status: 'missing' }
+
+  let raw: string | null
+  try {
+    raw = storage.getItem(VAULT_STORAGE_KEY)
+  } catch {
+    return { status: 'missing' }
+  }
+  if (!raw) return { status: 'missing' }
 
   try {
     const parsed: unknown = JSON.parse(raw)
-    return isEncryptedEnvelope(parsed) ? parsed : null
+    if (isEncryptedEnvelope(parsed)) return { status: 'valid', envelope: parsed }
+  } catch {
+    // JSON invalide : on conserve la donnée brute pour l'écran de récupération.
+  }
+  return { status: 'corrupted', raw }
+}
+
+export function readEnvelope(): EncryptedEnvelope | null {
+  const inspection = inspectEnvelope()
+  return inspection.status === 'valid' ? inspection.envelope : null
+}
+
+export function getRawEnvelope(): string | null {
+  const storage = getStorage()
+  if (!storage) return null
+  try {
+    return storage.getItem(VAULT_STORAGE_KEY)
   } catch {
     return null
   }

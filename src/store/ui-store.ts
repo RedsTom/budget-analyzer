@@ -19,6 +19,10 @@ interface UiState {
   typeFilter: DirectionFilter
   search: string
   includeInactiveRecurring: boolean
+  /** Feuille de saisie rapide, ouverte depuis la barre mobile ou la page. */
+  quickEntryOpen: boolean
+  quickEntryEditingId: string | null
+  quickEntryInitialType: 'expense' | 'income'
   /** Cible retenue aussi pendant l'animation de fermeture. */
   detail: DetailTarget | null
   detailOpen: boolean
@@ -29,6 +33,14 @@ interface UiState {
   setTypeFilter: (typeFilter: DirectionFilter) => void
   setSearch: (search: string) => void
   setIncludeInactiveRecurring: (include: boolean) => void
+  /** Ouvre la feuille de saisie, éventuellement sur une opération existante. */
+  openQuickEntry: (options?: {
+    id?: string
+    type?: 'expense' | 'income'
+  }) => void
+  closeQuickEntry: () => void
+  /** Ouvre directement une nouvelle dépense. */
+  requestNewExpense: () => void
   resetFilters: () => void
   openDetail: (target: DetailTarget) => void
   closeDetail: () => void
@@ -52,6 +64,9 @@ export const useUiStore = create<UiState>((set, get) => ({
   customRange: null,
   ...INITIAL_FILTERS,
   includeInactiveRecurring: false,
+  quickEntryOpen: false,
+  quickEntryEditingId: null,
+  quickEntryInitialType: 'expense',
   detail: null,
   detailOpen: false,
 
@@ -81,6 +96,22 @@ export const useUiStore = create<UiState>((set, get) => ({
 
   setIncludeInactiveRecurring(includeInactiveRecurring) {
     set({ includeInactiveRecurring })
+  },
+
+  openQuickEntry(options) {
+    set({
+      quickEntryOpen: true,
+      quickEntryEditingId: options?.id ?? null,
+      quickEntryInitialType: options?.type ?? 'expense',
+    })
+  },
+
+  closeQuickEntry() {
+    set({ quickEntryOpen: false, quickEntryEditingId: null })
+  },
+
+  requestNewExpense() {
+    get().openQuickEntry({ type: 'expense' })
   },
 
   resetFilters() {

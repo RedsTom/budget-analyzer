@@ -1,14 +1,21 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { RotateCcw } from 'lucide-react'
 import { cn } from 'cn'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { useIsMobile } from '@/hooks/use-media-query'
 import { CategoryBadge } from '@/components/category-badge'
 import {
   DetailPanel,
   TransactionList,
   type DetailStat,
 } from '@/components/detail-panel'
+import { MerchantDialog } from '@/components/merchant-dialog'
 import { summarize } from '@/lib/analytics'
 import { categoryIdOf } from '@/lib/categories'
 import {
@@ -186,11 +193,13 @@ export function MerchantDetailPanel({
   transactions,
   aliases,
   onClose,
+  onEdit,
 }: {
   merchantKey: string
   transactions: Transaction[]
   aliases: Record<string, AliasEntry>
   onClose: () => void
+  onEdit?: () => void
 }) {
   const focusMerchant = useUiStore((state) => state.focusMerchant)
   const items = useMemo(
@@ -230,9 +239,16 @@ export function MerchantDetailPanel({
         { label: 'Net', value: formatSignedAmount(totals.net) },
       ]}
       footer={
-        <Button size="sm" variant="outline" onClick={() => focusMerchant(merchantKey)}>
-          Filtrer la page Transactions
-        </Button>
+        <>
+          {onEdit ? (
+            <Button size="sm" variant="outline" onClick={onEdit}>
+              Modifier
+            </Button>
+          ) : null}
+          <Button size="sm" variant="outline" onClick={() => focusMerchant(merchantKey)}>
+            Filtrer la page Transactions
+          </Button>
+        </>
       }
     >
       <section className="space-y-2">
@@ -254,11 +270,13 @@ export function TransactionDetailPanel({
   transactions,
   aliases,
   onClose,
+  onEdit,
 }: {
   transactionId: string
   transactions: Transaction[]
   aliases: Record<string, AliasEntry>
   onClose: () => void
+  onEdit?: () => void
 }) {
   const focusMerchant = useUiStore((state) => state.focusMerchant)
   const transaction = useMemo(
@@ -314,13 +332,20 @@ export function TransactionDetailPanel({
         },
       ]}
       footer={
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => focusMerchant(transaction.merchantKey)}
-        >
-          Filtrer la page Transactions
-        </Button>
+        <>
+          {onEdit ? (
+            <Button size="sm" variant="outline" onClick={onEdit}>
+              Modifier le marchand
+            </Button>
+          ) : null}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => focusMerchant(transaction.merchantKey)}
+          >
+            Filtrer la page Transactions
+          </Button>
+        </>
       }
     >
       <section className="space-y-2">
@@ -364,6 +389,60 @@ export function DetailHost() {
   const aliases = useVaultStore((state) => state.aliases)
   const recurringDecisions = useVaultStore((state) => state.recurringDecisions)
   const setRecurringDecision = useVaultStore((state) => state.setRecurringDecision)
+  const isMobile = useIsMobile()
+  const historyPushed = useRef(false)
+  const pushedHash = useRef<string | null>(null)
+  const [editingMerchant, setEditingMerchant] = useState<string | null>(null)
+  const editingSource = editingMerchant
+    ? transactions.find((transaction) => transaction.merchantKey === editingMerchant)
+    : undefined
+  const merchantDialog = (
+    <MerchantDialog
+      key={editingMerchant ?? 'closed'}
+      merchantKey={editingMerchant}
+      initialLabel={
+        editingSource ? resolveDisplayName(editingSource, aliases) : (editingMerchant ?? '')
+      }
+      initialCategoryId={
+        editingSource ? categoryIdOf(editingSource, aliases) : 'autres'
+      }
+      rawLabel={editingSource?.rawLabel}
+      onClose={() => setEditingMerchant(null)}
+    />
+  )
+
+  // Retour Android / geste retour : le détail se comporte comme une page.
+  useEffect(() => {
+    if (!isMobile) return
+    if (open && !historyPushed.current) {
+      historyPushed.current = true
+      pushedHash.current = window.location.hash
+      window.history.pushState(
+        { ...window.history.state, budgetDetail: true },
+        '',
+        window.location.href,
+      )
+      return
+    }
+    if (!open && historyPushed.current) {
+      const sameLocation = window.location.hash === pushedHash.current
+      historyPushed.current = false
+      pushedHash.current = null
+      if (sameLocation) window.history.back()
+    }
+  }, [open, isMobile])
+
+  useEffect(() => {
+    if (!isMobile) return
+    const onPopState = () => {
+      if (!historyPushed.current) return
+      historyPushed.current = false
+      pushedHash.current = null
+      closeDetail()
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [isMobile, closeDetail])
 
   const series = useMemo(
     () =>
@@ -387,7 +466,11 @@ export function DetailHost() {
           transactions={transactions}
           aliases={aliases}
           onClose={closeDetail}
-          onDecision={(decision) => void setRecurringDecision(current.id, decision)}
+          onDecision={(decision) => {
+            void setRecurringDecision(current.id, decision).catch(() => {
+              // L'erreur de sauvegarde est exposée par le bandeau du shell.
+            })
+          }}
         />
       )
     }
@@ -398,6 +481,7 @@ export function DetailHost() {
         transactions={transactions}
         aliases={aliases}
         onClose={closeDetail}
+        onEdit={() => setEditingMerchant(detail.merchantKey)}
       />
     )
   } else if (detail?.kind === 'transaction') {
@@ -407,35 +491,60 @@ export function DetailHost() {
         transactions={transactions}
         aliases={aliases}
         onClose={closeDetail}
+        onEdit={() => {
+          const transaction = transactions.find((item) => item.id === detail.id)
+          if (transaction) setEditingMerchant(transaction.merchantKey)
+        }}
       />
     )
   }
 
+  if (isMobile) {
+    return (
+      <>
+        <Dialog
+          open={open}
+          onOpenChange={(next) => {
+            if (!next) closeDetail()
+          }}
+        >
+          <DialogContent
+            mobileSheet={false}
+            showCloseButton={false}
+            className="top-0 left-0 h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none border-0 p-0 pt-[env(safe-area-inset-top)] sm:max-w-none"
+          >
+            <DialogTitle className="sr-only">Détail</DialogTitle>
+            <div className="flex h-full min-h-0 flex-col">{content}</div>
+          </DialogContent>
+        </Dialog>
+        {merchantDialog}
+      </>
+    )
+  }
+
   return (
-    <aside
-      aria-hidden={!open}
-      inert={!open}
-      onTransitionEnd={(event) => {
-        if (event.target !== event.currentTarget) return
-        if (event.propertyName !== 'width' && event.propertyName !== 'transform') return
-        if (!open) clearDetail()
-      }}
-      className={cn(
-        'flex shrink-0 flex-col overflow-hidden bg-background',
-        'transition-[width,transform,opacity] duration-300 ease-out',
-        'max-md:fixed max-md:inset-0 max-md:z-40 max-md:h-svh max-md:w-full',
-        open
-          ? 'max-md:translate-x-0 max-md:opacity-100'
-          : 'max-md:pointer-events-none max-md:translate-x-full max-md:opacity-0',
-        'md:h-full',
-        open
-          ? cn('md:border-l md:opacity-100', PANEL_WIDTH)
-          : 'md:w-0 md:opacity-0',
-      )}
-    >
-      <div className={cn('flex h-full min-h-0 flex-col max-md:w-full', PANEL_WIDTH)}>
-        {content}
-      </div>
-    </aside>
+    <>
+      <aside
+        aria-hidden={!open}
+        inert={!open}
+        onTransitionEnd={(event) => {
+          if (event.target !== event.currentTarget) return
+          if (event.propertyName !== 'width' && event.propertyName !== 'transform') return
+          if (!open) clearDetail()
+        }}
+        className={cn(
+          'flex h-full shrink-0 flex-col overflow-hidden bg-background',
+          'transition-[width,opacity] duration-300 ease-out motion-reduce:transition-none',
+          open
+            ? cn('border-l opacity-100', PANEL_WIDTH)
+            : 'w-0 opacity-0',
+        )}
+      >
+        <div className={cn('flex h-full min-h-0 flex-col', PANEL_WIDTH)}>
+          {content}
+        </div>
+      </aside>
+      {merchantDialog}
+    </>
   )
 }

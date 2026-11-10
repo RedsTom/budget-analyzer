@@ -51,6 +51,8 @@ import {
   type BudgetCategoryStat,
   type BudgetProposal,
 } from '@/lib/ai'
+import { aiFailureFromMessage } from '@/lib/ai-errors'
+import { guardAiOnline, notifyAiFailure } from '@/lib/ai-notify'
 import { buildAssistantContext } from '@/lib/assistant-context'
 import { CATEGORIES, categoryById, categoryIdOf } from '@/lib/categories'
 import { formatAmount, formatCount } from '@/lib/format'
@@ -213,6 +215,7 @@ export function BudgetsPage() {
 
   async function handlePropose() {
     if (!aiApiKey) return
+    if (!guardAiOnline(() => void handlePropose())) return
     setProposing(true)
     try {
       const result = await proposeBudgets(
@@ -225,6 +228,10 @@ export function BudgetsPage() {
         aiApiKey,
       )
       if (!result.ok) {
+        notifyAiFailure(
+          result.failure ?? aiFailureFromMessage(result.error),
+          () => void handlePropose(),
+        )
         toast.error(result.error)
         return
       }

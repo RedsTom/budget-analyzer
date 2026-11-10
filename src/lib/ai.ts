@@ -10,17 +10,41 @@
  * - Zéro dépendance lourde : appels REST légers directs via fetch().
  */
 
+import {
+  classifyAiError,
+  classifyAiStatus,
+  failure as aiFailure,
+  type AiFailure,
+} from './ai-errors'
 import { CATEGORIES, isCategoryId, type CategoryId } from './categories'
 import {
   ASSISTANT_TOOL_DECLARATIONS,
   runAssistantTool,
   type AssistantToolContext,
 } from './assistant-tools'
+import { isOnline } from './connectivity'
 import type { AssistantArtifact, AssistantChatMessage } from './types'
 
 export type AiResult<T> =
   | { ok: true; value: T }
-  | { ok: false; error: string }
+  | { ok: false; error: string; failure?: AiFailure }
+
+/** Erreur interne qui conserve la classification jusqu'aux parseurs publics. */
+class AiRequestError extends Error {
+  readonly failure: AiFailure
+
+  constructor(value: AiFailure) {
+    super(value.message)
+    this.name = 'AiRequestError'
+    this.failure = value
+  }
+}
+
+function failed(cause: unknown): { ok: false; error: string; failure: AiFailure } {
+  const failure =
+    cause instanceof AiRequestError ? cause.failure : classifyAiError(cause)
+  return { ok: false, error: failure.message, failure }
+}
 
 /** Délai maximal d'une requête Gemini. */
 const REQUEST_TIMEOUT_MS = 25_000
@@ -35,23 +59,6 @@ const GEMINI_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.8-flash']
 /** Vrai dans tout environnement moderne avec fetch disponible. */
 export function isAiSupported(): boolean {
   return typeof globalThis.fetch === 'function'
-}
-
-/** Formate les erreurs de requête pour l'utilisateur final sans jargon développeur. */
-function describeError(cause: unknown): string {
-  if (cause instanceof Error && cause.name === 'AbortError') {
-    return 'Délai d’attente dépassé (service temporairement trop lent).'
-  }
-  if (cause instanceof TypeError && /failed to fetch|network/i.test(cause.message)) {
-    return 'Connexion internet inaccessible. Vérifiez votre réseau.'
-  }
-  if (cause instanceof Error) {
-    if (/high demand|overloaded|surchargé|capacité/i.test(cause.message)) {
-      return 'Le service est temporairement très sollicité. Veuillez réessayer dans quelques instants.'
-    }
-    return cause.message
-  }
-  return 'Le service d’assistance est momentanément indisponible.'
 }
 
 interface GeminiPayload {
@@ -110,8 +117,12 @@ async function tryModelRequest(
   payload: GeminiPayload,
 ): Promise<
   | { ok: true; text: string; parts: GeminiPart[] }
-  | { ok: false; status: number; message: string; retryable: boolean }
+  | { ok: false; failure: AiFailure }
 > {
+  if (!isOnline()) {
+    return { ok: false, failure: aiFailure('offline') }
+  }
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`
   const response = await fetch(url, {
     method: 'POST',
@@ -131,17 +142,32 @@ async function tryModelRequest(
       // Ignorer l'erreur de parsing
     }
 
-    if (response.status === 400 || response.status === 403) {
-      return { ok: false, status: response.status, message: 'Clé API invalide ou non autorisée.', retryable: false }
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      return {
+        ok: false,
+        failure: aiFailure('auth', 'Clé API invalide ou non autorisée.', {
+          retryable: false,
+          status: response.status,
+        }),
+      }
     }
 
-    const isDemandError = response.status === 429 || response.status === 503 || /high demand|quota|capacity|unavailable/i.test(message)
-    return {
-      ok: false,
-      status: response.status,
-      message: isDemandError ? 'Service temporairement très sollicité.' : message,
-      retryable: isDemandError || response.status >= 500,
+    const isDemandError =
+      response.status === 429 ||
+      response.status === 503 ||
+      /high demand|quota|capacity|unavailable/i.test(message)
+    if (isDemandError) {
+      return {
+        ok: false,
+        failure: aiFailure(
+          response.status === 429 ? 'quota' : 'server',
+          'Service temporairement très sollicité.',
+          { retryable: true, status: response.status },
+        ),
+      }
     }
+
+    return { ok: false, failure: classifyAiStatus(response.status, message) }
   }
 
   const data = (await response.json()) as GeminiResponse
@@ -151,7 +177,10 @@ async function tryModelRequest(
     .map((part) => (typeof part.text === 'string' ? part.text : ''))
     .join('')
   if (!text.trim() && !parts.some((part) => part.functionCall)) {
-    return { ok: false, status: 200, message: 'Réponse vide reçue.', retryable: false }
+    return {
+      ok: false,
+      failure: aiFailure('invalid-response', 'Réponse vide reçue.', { retryable: false }),
+    }
   }
   return { ok: true, text, parts }
 }
@@ -183,7 +212,7 @@ async function callGemini(
     },
   }
 
-  let lastError = 'Service indisponible.'
+  let lastFailure: AiFailure = aiFailure('unknown')
 
   for (const model of GEMINI_MODELS) {
     try {
@@ -191,20 +220,23 @@ async function callGemini(
       if (result.ok) {
         return result.text
       }
-      lastError = result.message
-      // Si la clé est mauvaise, pas la peine de boucler sur les autres modèles
-      if (!result.retryable) {
-        throw new Error(result.message)
+      lastFailure = result.failure
+      // Inutile de boucler sur un second modèle si le réseau ou la clé
+      // bloquent la requête.
+      if (!result.failure.retryable || result.failure.code === 'offline') {
+        throw new AiRequestError(result.failure)
       }
     } catch (cause) {
-      if (cause instanceof Error && cause.message === 'Clé API invalide ou non autorisée.') {
-        throw cause
+      if (cause instanceof AiRequestError) throw cause
+      const failure = classifyAiError(cause)
+      lastFailure = failure
+      if (!failure.retryable || failure.code === 'offline') {
+        throw new AiRequestError(failure)
       }
-      lastError = cause instanceof Error ? cause.message : 'Erreur de connexion'
     }
   }
 
-  throw new Error(lastError)
+  throw new AiRequestError(lastFailure)
 }
 
 /**
@@ -215,7 +247,7 @@ export async function testGeminiApiKey(apiKey: string): Promise<AiResult<null>> 
     await callGemini(apiKey, 'Tu es un vérificateur technique.', 'Réponds OK')
     return { ok: true, value: null }
   } catch (cause) {
-    return { ok: false, error: describeError(cause) }
+    return failed(cause)
   }
 }
 
@@ -341,7 +373,7 @@ export async function suggestMerchantName(
       ? { ok: true, value: name }
       : { ok: false, error: 'Suggestion inexploitable, réessayez.' }
   } catch (cause) {
-    return { ok: false, error: describeError(cause) }
+    return failed(cause)
   }
 }
 
@@ -359,7 +391,7 @@ export async function analyzePeriod(
       ? { ok: true, value: text }
       : { ok: false, error: 'Réponse vide, réessayez.' }
   } catch (cause) {
-    return { ok: false, error: describeError(cause) }
+    return failed(cause)
   }
 }
 
@@ -439,7 +471,7 @@ export async function batchSuggestMerchantNames(
     } catch (cause) {
       // Si un chunk échoue mais qu'on a déjà des résultats, on continue ou on signale
       if (results.length === 0 && i + CHUNK_SIZE >= items.length) {
-        return { ok: false, error: describeError(cause) }
+        return failed(cause)
       }
     }
     onProgress?.(Math.min(items.length, i + CHUNK_SIZE), items.length)
@@ -511,24 +543,38 @@ export async function batchAnalyzeRecurring(
   if (!apiKey) return { ok: false, error: 'Clé API non configurée.' }
   if (items.length === 0) return { ok: true, value: [] }
 
-  const promptLines = [
-    'Analyse ces opérations régulières et indique si ce sont des charges récurrentes/abonnements ("accepted") ou des achats ponctuels répétés ("refused") :',
-    ...items.map(
-      (item) =>
-        `- ID: "${item.id}" | Marchand: "${item.merchantName}" | Montant: ${item.amount.toFixed(2)} EUR | Intervalle moyen: ~${item.intervalDays} jours`,
-    ),
-    'Format JSON attendu : [{"id": "...", "decision": "accepted"|"refused", "reason": "..."}]',
-  ].join('\n')
+  const CHUNK_SIZE = 20
+  const results: RecurringBatchResult[] = []
+  let lastCause: unknown = null
+  let failures = 0
 
-  try {
-    const raw = await callGemini(apiKey, BATCH_RECURRING_SYSTEM, promptLines, true)
-    const results = parseRecurringBatchResponse(raw)
-    return results.length > 0
-      ? { ok: true, value: results }
-      : { ok: false, error: 'Format de réponse invalide.' }
-  } catch (cause) {
-    return { ok: false, error: describeError(cause) }
+  for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+    const chunk = items.slice(i, i + CHUNK_SIZE)
+    const promptLines = [
+      'Analyse ces opérations régulières et indique si ce sont des charges récurrentes/abonnements ("accepted") ou des achats ponctuels répétés ("refused") :',
+      ...chunk.map(
+        (item) =>
+          `- ID: "${item.id}" | Marchand: "${item.merchantName}" | Montant: ${item.amount.toFixed(2)} EUR | Intervalle moyen: ~${item.intervalDays} jours`,
+      ),
+      'Format JSON attendu : [{"id": "...", "decision": "accepted"|"refused", "reason": "..."}]',
+    ].join('\n')
+
+    try {
+      const raw = await callGemini(apiKey, BATCH_RECURRING_SYSTEM, promptLines, true)
+      results.push(...parseRecurringBatchResponse(raw))
+    } catch (cause) {
+      failures += 1
+      lastCause = cause
+      if (cause instanceof AiRequestError && !cause.failure.retryable) {
+        return failed(cause)
+      }
+    }
   }
+
+  if (results.length === 0 && failures > 0) return failed(lastCause)
+  return results.length > 0
+    ? { ok: true, value: results }
+    : { ok: false, error: 'Format de réponse invalide.' }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -748,7 +794,7 @@ export async function proposeBudgets(
       ? { ok: true, value: proposals }
       : { ok: false, error: 'Aucune proposition exploitable reçue.' }
   } catch (cause) {
-    return { ok: false, error: describeError(cause) }
+    return failed(cause)
   }
 }
 
@@ -896,7 +942,7 @@ export async function askAssistant(
       ? { ok: true, value: text }
       : { ok: false, error: 'Réponse vide, reformulez votre question.' }
   } catch (cause) {
-    return { ok: false, error: describeError(cause) }
+    return failed(cause)
   }
 }
 
@@ -1081,8 +1127,7 @@ function parseArtifactIndices(args: Record<string, unknown> | undefined): number
 interface ChatAttemptResult {
   ok: boolean
   reply?: AssistantChatReply
-  message?: string
-  retryable?: boolean
+  failure?: AiFailure
 }
 
 async function runChatAttempt(
@@ -1114,7 +1159,12 @@ async function runChatAttempt(
       .map((index) => pool.find((entry) => entry.index === index)?.artifact)
       .filter((artifact): artifact is AssistantArtifact => artifact !== undefined)
     if (!text && artifacts.length === 0) {
-      return { ok: false, message: 'Réponse vide, reformulez votre question.', retryable: false }
+      return {
+        ok: false,
+        failure: aiFailure('invalid-response', 'Réponse vide, reformulez votre question.', {
+          retryable: false,
+        }),
+      }
     }
     return {
       ok: true,
@@ -1135,7 +1185,7 @@ async function runChatAttempt(
     })
 
     if (!result.ok) {
-      return { ok: false, message: result.message, retryable: result.retryable }
+      return { ok: false, failure: result.failure }
     }
 
     const calls = result.parts.filter((part) => part.functionCall?.name)
@@ -1161,7 +1211,7 @@ async function runChatAttempt(
         generationConfig: { temperature: 0.3 },
       })
       if (!final.ok) {
-        return { ok: false, message: final.message, retryable: final.retryable }
+        return { ok: false, failure: final.failure }
       }
       return finish(cleanAssistantChatText(final.text))
     }
@@ -1216,7 +1266,12 @@ async function runChatAttempt(
     contents.push({ role: 'user', parts: responses })
   }
 
-  return { ok: false, message: 'Analyse trop longue, reformulez votre question.', retryable: false }
+  return {
+    ok: false,
+    failure: aiFailure('invalid-response', 'Analyse trop longue, reformulez votre question.', {
+      retryable: false,
+    }),
+  }
 }
 
 /**
@@ -1229,8 +1284,11 @@ export async function askAssistantWithTools(
   const key = input.apiKey?.trim()
   if (!key) return { ok: false, error: 'Clé API non configurée.' }
   if (!input.question.trim()) return { ok: false, error: 'Posez une question pour continuer.' }
+  if (!isOnline()) {
+    return { ok: false, error: 'Connexion internet inaccessible.', failure: aiFailure('offline') }
+  }
 
-  let lastError = 'Service indisponible.'
+  let lastFailure = aiFailure('unknown', 'Service indisponible.')
 
   for (const model of CHAT_MODELS) {
     try {
@@ -1242,17 +1300,20 @@ export async function askAssistantWithTools(
         input.context,
       )
       if (result.ok && result.reply) return { ok: true, value: result.reply }
-      lastError = result.message ?? lastError
-      if (!result.retryable) return { ok: false, error: lastError }
+      lastFailure = result.failure ?? lastFailure
+      if (!lastFailure.retryable || lastFailure.code === 'offline') {
+        return { ok: false, error: lastFailure.message, failure: lastFailure }
+      }
     } catch (cause) {
-      lastError = describeError(cause)
-      if (cause instanceof Error && /clé api/i.test(cause.message)) {
-        return { ok: false, error: lastError }
+      const failure = classifyAiError(cause)
+      lastFailure = failure
+      if (!failure.retryable) {
+        return { ok: false, error: failure.message, failure }
       }
     }
   }
 
-  return { ok: false, error: lastError }
+  return { ok: false, error: lastFailure.message, failure: lastFailure }
 }
 
 

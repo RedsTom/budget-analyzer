@@ -4,6 +4,7 @@ import {
   Check,
   FileUp,
   ExternalLink,
+  Fingerprint,
   LockKeyhole,
   ShieldCheck,
   Sparkles,
@@ -19,12 +20,21 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CsvImporter } from '@/components/csv-importer'
 import { testGeminiApiKey } from '@/lib/ai'
+import { aiFailureFromMessage } from '@/lib/ai-errors'
+import { guardAiOnline, notifyAiFailure } from '@/lib/ai-notify'
 import type { ParsedCsvFile } from '@/lib/csv'
 import { formatCount } from '@/lib/format'
+import {
+  isPasskeySupported,
+  passkeyErrorMessage,
+  registerPasskey,
+  removePasskey,
+} from '@/lib/passkey'
 import { useVaultStore } from '@/store/vault-store'
 
 type Step = 1 | 2 | 3
@@ -37,6 +47,8 @@ export function SetupScreen() {
   const [password, setPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [usePasskey, setUsePasskey] = useState(false)
+  const passkeySupported = isPasskeySupported()
 
   // Étape 2 : premier relevé (facultatif)
   const [imports, setImports] = useState<ParsedCsvFile[]>([])
@@ -81,6 +93,7 @@ export function SetupScreen() {
       setAiError('Veuillez saisir votre clé API.')
       return
     }
+    if (!guardAiOnline(() => void handleTestKey())) return
     setTestingKey(true)
     setAiError(null)
     setKeyTestedOk(false)
@@ -89,6 +102,9 @@ export function SetupScreen() {
       if (res.ok) {
         setKeyTestedOk(true)
       } else {
+        notifyAiFailure(res.failure ?? aiFailureFromMessage(res.error), () => {
+          void handleTestKey()
+        })
         setAiError(res.error)
       }
     } finally {
@@ -97,9 +113,30 @@ export function SetupScreen() {
   }
 
   async function handleComplete(enableAi: boolean) {
+    if (submitting) return
     setSubmitting(true)
     setAiError(null)
     try {
+      if (usePasskey) {
+        // La cérémonie WebAuthn doit précéder la création : si PRF n'est pas
+        // disponible, on n'écrit pas un coffre dont la clé serait inutilisable.
+        try {
+          await registerPasskey(password)
+        } catch (cause) {
+          removePasskey()
+          setUsePasskey(false)
+          setAiError(
+            `${passkeyErrorMessage(cause)} Le coffre n’a pas encore été créé : cliquez à nouveau pour continuer avec le mot de passe.`,
+          )
+          setSubmitting(false)
+          return
+        }
+      } else {
+        // Aucun coffre n'existe encore : un enregistrement résiduel serait
+        // forcément obsolète.
+        removePasskey()
+      }
+
       await setup(
         password,
         {
@@ -114,13 +151,14 @@ export function SetupScreen() {
         )
       }
     } catch (cause) {
+      if (usePasskey) removePasskey()
       setAiError(cause instanceof Error ? cause.message : 'Création impossible')
       setSubmitting(false)
     }
   }
 
   return (
-    <main className="relative flex min-h-svh items-center justify-center overflow-hidden bg-muted/40 px-4 py-12">
+    <main className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-muted/40 px-4 py-12">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,var(--color-primary)/8%,transparent_60%)]"
@@ -169,6 +207,34 @@ export function SetupScreen() {
                   />
                 </div>
 
+                <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
+                  <Checkbox
+                    id="use-passkey"
+                    checked={usePasskey}
+                    onCheckedChange={(checked) => setUsePasskey(checked === true)}
+                    disabled={!passkeySupported}
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-1">
+                    <Label
+                      htmlFor="use-passkey"
+                      className="flex items-center gap-1.5 text-sm font-medium"
+                    >
+                      <Fingerprint className="size-4" />
+                      Déverrouiller avec une clé d’accès
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Le mot de passe reste votre secours si la clé est perdue.
+                      La configuration sera demandée à la création du coffre.
+                    </p>
+                    {!passkeySupported ? (
+                      <p className="text-xs text-amber-700 dark:text-amber-400">
+                        Ce navigateur ne prend pas en charge les clés d’accès WebAuthn.
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+
                 {passwordError ? (
                   <p className="text-sm text-destructive" role="alert">
                     {passwordError}
@@ -182,10 +248,12 @@ export function SetupScreen() {
 
               <Alert>
                 <ShieldCheck />
-                <AlertTitle>Aucune récupération possible</AlertTitle>
+                <AlertTitle>Récupération limitée</AlertTitle>
                 <AlertDescription>
-                  Le mot de passe n’est jamais stocké. S’il est perdu, les données
-                  chiffrées sont définitivement illisibles.
+                  Le mot de passe n’est jamais stocké en clair. Sans clé d’accès,
+                  s’il est perdu, les données chiffrées sont définitivement
+                  illisibles. Une clé d’accès peut déverrouiller le coffre sur cet
+                  appareil, mais ne remplace pas une sauvegarde.
                 </AlertDescription>
               </Alert>
 

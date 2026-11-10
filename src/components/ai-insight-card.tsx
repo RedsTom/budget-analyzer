@@ -11,6 +11,8 @@ import {
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import type { AiResult } from '@/lib/ai'
+import { aiFailureFromMessage } from '@/lib/ai-errors'
+import { guardAiOnline, notifyAiFailure } from '@/lib/ai-notify'
 import { useVaultStore } from '@/store/vault-store'
 
 type InsightState =
@@ -61,8 +63,15 @@ export function AiInsightCard({
 
   async function run(question?: string) {
     if (loading) return
+    if (!guardAiOnline(() => void run(question))) return
     setState({ status: 'loading' })
     const result = await onRun(question?.trim() || undefined)
+    if (!result.ok) {
+      notifyAiFailure(
+        result.failure ?? aiFailureFromMessage(result.error),
+        () => void run(question),
+      )
+    }
     setState(
       result.ok
         ? { status: 'done', text: result.value, question: question?.trim() || undefined }

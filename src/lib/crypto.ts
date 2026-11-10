@@ -163,6 +163,7 @@ const assistantArtifactSchema = z.discriminatedUnion('type', [
         creditId: z.string(),
         creditLabel: z.string(),
         creditAmount: z.number(),
+        partAmount: z.number().optional(),
       }),
     ),
   }),
@@ -200,8 +201,27 @@ const vaultSchema = z.object({
     .default({}),
   // Budgets définis par l'utilisateur
   budgets: z.array(budgetPlanSchema).optional().default([]),
-  // Affectations manuelles dépenses -> crédits
-  customAllocations: z.record(z.string(), z.string()).optional().default({}),
+  // Affectations manuelles dépenses -> crédits (chaîne = montant total,
+  // objet = part manuelle plafonnée pour un fractionnement).
+  customAllocations: z
+    .record(
+      z.string(),
+      z.union([
+        z.string(),
+        z.object({
+          creditId: z.string().min(1),
+          amount: z.number().finite().nonnegative().optional(),
+        }),
+        z.array(
+          z.object({
+            creditId: z.string().min(1),
+            amount: z.number().finite().nonnegative(),
+          }),
+        ),
+      ]),
+    )
+    .optional()
+    .default({}),
   // IA : désactivée par défaut, y compris pour les coffres existants.
   aiEnabled: z.boolean().default(false),
   aiApiKey: z.string().optional(),

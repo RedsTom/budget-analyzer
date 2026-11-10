@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { KeyRound } from 'lucide-react'
+import { Fingerprint, KeyRound } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -10,6 +10,11 @@ import {
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  hasPasskey,
+  passkeyErrorMessage,
+  unlockWithPasskey,
+} from '@/lib/passkey'
 import { useVaultStore } from '@/store/vault-store'
 
 export function UnlockScreen() {
@@ -18,6 +23,8 @@ export function UnlockScreen() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [passkeyBusy, setPasskeyBusy] = useState(false)
+  const [passkeyAvailable] = useState(() => hasPasskey())
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -32,8 +39,21 @@ export function UnlockScreen() {
     }
   }
 
+  async function handlePasskey() {
+    if (passkeyBusy || submitting) return
+    setError(null)
+    setPasskeyBusy(true)
+    try {
+      const recoveredPassword = await unlockWithPasskey()
+      await unlock(recoveredPassword)
+    } catch (cause) {
+      setError(passkeyErrorMessage(cause))
+      setPasskeyBusy(false)
+    }
+  }
+
   return (
-    <main className="flex min-h-svh items-center justify-center bg-muted/40 px-4 py-12">
+    <main className="flex min-h-dvh items-center justify-center bg-muted/40 px-4 py-12">
       <Card className="w-full max-w-sm">
         <CardHeader>
           <div className="mb-3 flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
@@ -46,6 +66,25 @@ export function UnlockScreen() {
         </CardHeader>
 
         <CardContent className="space-y-4">
+          {passkeyAvailable ? (
+            <div className="space-y-3">
+              <Button
+                type="button"
+                className="w-full"
+                onClick={() => void handlePasskey()}
+                disabled={submitting || passkeyBusy}
+              >
+                <Fingerprint className="size-4" />
+                {passkeyBusy ? 'Vérification…' : 'Déverrouiller avec une clé d’accès'}
+              </Button>
+              <div className="flex items-center gap-2 text-[11px] tracking-wide text-muted-foreground uppercase">
+                <span className="h-px flex-1 bg-border" />
+                ou avec le mot de passe
+                <span className="h-px flex-1 bg-border" />
+              </div>
+            </div>
+          ) : null}
+
           <form className="space-y-4" onSubmit={handleSubmit}>
             <div className="space-y-2">
               <Label htmlFor="unlock-password">Mot de passe</Label>
@@ -65,7 +104,11 @@ export function UnlockScreen() {
               </p>
             ) : null}
 
-            <Button type="submit" className="w-full" disabled={submitting}>
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={submitting || passkeyBusy}
+            >
               {submitting ? 'Déchiffrement…' : 'Déverrouiller'}
             </Button>
           </form>

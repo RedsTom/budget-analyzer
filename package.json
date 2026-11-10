@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "pwa:assets": "pwa-assets-generator --preset minimal-2023 public/app-icon.svg"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
@@ -20,7 +21,6 @@
     "cn": "^0.5.2",
     "date-fns": "^4.4.0",
     "lucide-react": "^1.70.0",
-    "next-themes": "^0.4.6",
     "papaparse": "^5.7.0",
     "radix-ui": "^1.8.1",
     "react": "^19.3.1",
@@ -41,6 +41,7 @@
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@vite-pwa/assets-generator": "^2.0.0",
     "@vitejs/plugin-react": "^6.1.2",
     "eslint": "^10.14.0",
     "eslint-plugin-react-hooks": "^7.1.1",
@@ -49,6 +50,7 @@
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.72.1",
     "vite": "^8.3.6",
+    "vite-plugin-pwa": "^2.0.0",
     "vitest": "^5.1.0"
   }
 }

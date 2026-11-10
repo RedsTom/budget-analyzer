@@ -246,7 +246,7 @@ describe('récurrences, couverture et affectations', () => {
     expect(result.artifacts[0]?.type).toBe('recurring')
   })
 
-  it('expose la couverture FIFO des crédits', () => {
+  it('expose la couverture manuelle des crédits', () => {
     const result = runAssistantTool('coverage_status', {}, context())
     const summary = result.summary as { credits: { credit_id: string; montant: number }[] }
     expect(summary.credits.length).toBeGreaterThan(0)

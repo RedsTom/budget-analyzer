@@ -27,9 +27,11 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AiInsightCard } from '@/components/ai-insight-card'
+import { DataList, DataListRow } from '@/components/data-list'
 import { PageHeader } from '@/components/page-header'
 import { SortableHeader } from '@/components/sortable-header'
 import { StatCard } from '@/components/stat-card'
+import { useIsMobile } from '@/hooks/use-media-query'
 import { usePeriod } from '@/hooks/use-period'
 import { askAssistant } from '@/lib/ai'
 import {
@@ -77,6 +79,7 @@ export function AnalysisPage() {
   const customAllocations = useVaultStore((state) => state.customAllocations)
   const aiApiKey = useVaultStore((state) => state.aiApiKey)
   const { range, previous, label } = usePeriod()
+  const mobile = useIsMobile()
   const drillIntoRange = useUiStore((state) => state.drillIntoRange)
 
   const [direction, setDirection] = useState<'expense' | 'income'>('expense')
@@ -204,9 +207,9 @@ export function AnalysisPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-64 w-full">
+            <div className="h-56 w-full sm:h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={months} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <BarChart data={months} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
                   <CartesianGrid
                     strokeDasharray="3 3"
                     vertical={false}
@@ -216,14 +219,14 @@ export function AnalysisPage() {
                     dataKey="label"
                     tickLine={false}
                     axisLine={false}
-                    tick={{ fontSize: 11 }}
-                    minTickGap={12}
+                    tick={{ fontSize: mobile ? 10 : 11 }}
+                    minTickGap={mobile ? 18 : 12}
                   />
                   <YAxis
-                    width={56}
+                    width={mobile ? 44 : 56}
                     tickLine={false}
                     axisLine={false}
-                    tick={{ fontSize: 11 }}
+                    tick={{ fontSize: mobile ? 10 : 11 }}
                     tickFormatter={(value: number) => formatCompactAmount(value)}
                   />
                   <RechartsTooltip
@@ -241,6 +244,7 @@ export function AnalysisPage() {
                     fill="#10b981"
                     radius={[4, 4, 0, 0]}
                     className="cursor-pointer"
+                    isAnimationActive={false}
                     onClick={(_data, index) => drillMonth(months[index].month)}
                   />
                   <Bar
@@ -249,6 +253,7 @@ export function AnalysisPage() {
                     fill="#f43f5e"
                     radius={[4, 4, 0, 0]}
                     className="cursor-pointer"
+                    isAnimationActive={false}
                     onClick={(_data, index) => drillMonth(months[index].month)}
                   />
                 </BarChart>
@@ -301,6 +306,7 @@ export function AnalysisPage() {
                             outerRadius={58}
                             paddingAngle={2}
                             strokeWidth={0}
+                            isAnimationActive={false}
                           >
                             {slices.map((slice) => (
                               <Cell key={slice.id} fill={slice.color} />
@@ -362,20 +368,25 @@ export function AnalysisPage() {
             <CardDescription>Où partent vos dépenses dans la semaine</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-44 w-full">
+            <div className="h-40 w-full sm:h-44">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={weekdays} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <BarChart data={weekdays} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
                   <CartesianGrid
                     strokeDasharray="3 3"
                     vertical={false}
                     stroke="var(--color-border)"
                   />
-                  <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
-                  <YAxis
-                    width={56}
+                  <XAxis
+                    dataKey="label"
                     tickLine={false}
                     axisLine={false}
-                    tick={{ fontSize: 11 }}
+                    tick={{ fontSize: mobile ? 10 : 11 }}
+                  />
+                  <YAxis
+                    width={mobile ? 44 : 56}
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fontSize: mobile ? 10 : 11 }}
                     tickFormatter={(value: number) => formatCompactAmount(value)}
                   />
                   <RechartsTooltip
@@ -383,7 +394,12 @@ export function AnalysisPage() {
                     cursor={{ fill: 'var(--color-muted)', opacity: 0.4 }}
                     formatter={(value) => [formatAmount(Number(value)), 'Dépenses']}
                   />
-                  <Bar dataKey="total" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                  <Bar
+                    dataKey="total"
+                    fill="#8b5cf6"
+                    radius={[4, 4, 0, 0]}
+                    isAnimationActive={false}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -437,7 +453,27 @@ export function AnalysisPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="px-0">
-          <div className="border-t">
+          <DataList className="md:hidden">
+            {sortedMonths.map((month) => (
+              <DataListRow
+                key={month.month}
+                primary={<span className="capitalize">{formatMonth(month.month)}</span>}
+                secondary={`${formatCount(month.count)} mouvements · dépenses ${formatAmount(
+                  month.expenses,
+                )}`}
+                amount={formatSignedAmount(month.net)}
+                amountClassName={
+                  month.net < 0
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : 'text-emerald-600 dark:text-emerald-400'
+                }
+                onClick={() => drillMonth(month.month)}
+                ariaLabel={`Ouvrir ${formatMonth(month.month)}`}
+              />
+            ))}
+          </DataList>
+
+          <div className="hidden border-t md:block">
             <Table>
               <TableHeader>
                 <TableRow>

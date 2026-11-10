@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import {
+  CorruptedVaultError,
   createVaultKey,
   decryptVault,
   emptyVault,
@@ -9,23 +10,37 @@ import {
   type VaultKey,
 } from '@/lib/crypto'
 import type { ParsedTransaction } from '@/lib/csv'
-import { clearEnvelope, hasVault, readEnvelope, writeEnvelope } from '@/lib/storage'
+import {
+  clearEnvelope,
+  inspectEnvelope,
+  readEnvelope,
+  writeEnvelope,
+} from '@/lib/storage'
 import { buildMerchantKey } from '@/lib/labels'
-import { compareLedger, mergeTransactions } from '@/lib/dedupe'
-import type {
-  AliasEntry,
-  AssistantChatMessage,
-  BudgetPlan,
-  Category,
-  CustomAllocationMap,
-  ImportSummary,
-  ParseError,
-  RecurringDecision,
-  Transaction,
-  VaultData,
+import { mergeTransactions } from '@/lib/dedupe'
+import {
+  insertIntoLedger,
+  removeFromLedger,
+  updateInLedger,
+} from '@/lib/manual-ledger'
+import { createWriteQueue, type WriteQueue } from '@/lib/persist-queue'
+import { removePasskey } from '@/lib/passkey'
+import {
+  allocationParts,
+  type AliasEntry,
+  type AssistantChatMessage,
+  type BudgetPlan,
+  type Category,
+  type CustomAllocationMap,
+  type CustomAllocationPart,
+  type ImportSummary,
+  type ParseError,
+  type RecurringDecision,
+  type Transaction,
+  type VaultData,
 } from '@/lib/types'
 
-type Status = 'empty' | 'locked' | 'unlocked'
+type Status = 'empty' | 'locked' | 'unlocked' | 'corrupted'
 
 export interface MerchantPatch {
   displayName?: string
@@ -70,7 +85,7 @@ interface VaultState {
     imports?: SetupImport[],
   ) => Promise<void>
   unlock: (password: string) => Promise<void>
-  lock: () => void
+  lock: () => Promise<void>
   /** Fusionne des lignes déjà parsées (onboarding ou import avec mappage). */
   importRows: (
     rows: ParsedTransaction[],
@@ -93,7 +108,16 @@ interface VaultState {
   /** Remplace la liste entière en une seule écriture chiffrée. */
   saveBudgets: (budgets: BudgetPlan[]) => Promise<void>
   deleteBudget: (budgetId: string) => Promise<void>
-  setCustomAllocation: (expenseId: string, creditId: string) => Promise<void>
+  setCustomAllocation: (
+    expenseId: string,
+    creditId: string,
+    amount?: number,
+  ) => Promise<void>
+  /** Affecte une dépense à une ou plusieurs parts de revenus. */
+  setCoverageAllocationParts: (
+    expenseId: string,
+    parts: CustomAllocationPart[],
+  ) => Promise<void>
   deleteCustomAllocation: (expenseId: string) => Promise<void>
   clearCustomAllocations: () => Promise<void>
   addManualTransaction: (input: ManualTransactionInput) => Promise<Transaction>
@@ -107,6 +131,10 @@ interface VaultState {
   /** Efface la conversation (bouton « Nouveau chat »). */
   clearAssistantChat: () => Promise<void>
   changePassword: (currentPassword: string, nextPassword: string) => Promise<void>
+  /** Vérifie un mot de passe sans modifier l'état du coffre. */
+  verifyPassword: (password: string) => Promise<boolean>
+  /** Relance une écriture après une erreur de quota ou de stockage. */
+  retrySave: () => Promise<void>
   reset: () => void
 }
 
@@ -116,6 +144,7 @@ interface VaultState {
  */
 let vaultKey: VaultKey | null = null
 let createdAt: string | null = null
+let persistQueue: WriteQueue | null = null
 
 function snapshot(state: VaultState): VaultData {
   return {
@@ -134,25 +163,58 @@ function snapshot(state: VaultState): VaultData {
   }
 }
 
+function buildManualTransaction(
+  input: ManualTransactionInput,
+  id: string,
+): Transaction {
+  const merchantKey = buildMerchantKey(input.rawLabel)
+  return {
+    id,
+    date: input.date,
+    valueDate: input.date,
+    debit: input.amount < 0 ? input.amount : null,
+    credit: input.amount > 0 ? input.amount : null,
+    amount: input.amount,
+    rawLabel: input.rawLabel,
+    merchantKey,
+    displayName: input.displayName?.trim() || undefined,
+    categoryId: input.categoryId || undefined,
+    note: input.note?.trim() || undefined,
+    // Une saisie manuelle du même jour passe après les opérations bancaires
+    // déjà présentes : elle ne doit pas se retrouver avant les crédits du jour
+    // et échapper à leur couverture manuelle.
+    order: Number.MAX_SAFE_INTEGER,
+    sourceFile: 'manual',
+    isManual: true,
+    solde: 0,
+  }
+}
+
 async function persist(
-  get: () => VaultState,
+  _get: () => VaultState,
   set: (partial: Partial<VaultState>) => void,
 ): Promise<void> {
-  if (!vaultKey) return
+  if (!vaultKey || !persistQueue) return
   set({ saving: true, error: null })
   try {
-    const envelope = await encryptVault(vaultKey, snapshot(get()))
-    writeEnvelope(envelope)
+    await persistQueue.schedule()
   } catch (error) {
     set({ error: error instanceof Error ? error.message : 'Sauvegarde impossible' })
     throw error
   } finally {
-    set({ saving: false })
+    if (persistQueue.isIdle()) set({ saving: false })
   }
 }
 
+const initialInspection = inspectEnvelope()
+
 export const useVaultStore = create<VaultState>((set, get) => ({
-  status: hasVault() ? 'locked' : 'empty',
+  status:
+    initialInspection.status === 'valid'
+      ? 'locked'
+      : initialInspection.status === 'corrupted'
+        ? 'corrupted'
+        : 'empty',
   transactions: [],
   aliases: {},
   categories: [],
@@ -216,8 +278,10 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   async unlock(password) {
     const envelope = readEnvelope()
     if (!envelope) {
-      set({ status: 'empty' })
-      throw new Error('Aucun coffre local')
+      const inspection = inspectEnvelope()
+      const corrupted = inspection.status === 'corrupted'
+      set({ status: corrupted ? 'corrupted' : 'empty' })
+      throw new Error(corrupted ? 'Coffre illisible ou corrompu' : 'Aucun coffre local')
     }
 
     try {
@@ -249,7 +313,9 @@ export const useVaultStore = create<VaultState>((set, get) => ({
         error: null,
       })
     } catch (error) {
+      const corrupted = error instanceof CorruptedVaultError
       set({
+        status: corrupted ? 'corrupted' : 'locked',
         error:
           error instanceof WrongPasswordError
             ? 'Mot de passe incorrect'
@@ -261,7 +327,13 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     }
   },
 
-  lock() {
+  async lock() {
+    // Les mutations en attente doivent être écrites avant d'oublier la clé.
+    try {
+      await flushVaultWrites()
+    } catch {
+      // On verrouille quand même : l'erreur de sauvegarde reste visible.
+    }
     vaultKey = null
     createdAt = null
     set({
@@ -277,6 +349,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       assistantChat: [],
       createdAt: null,
       lastImport: null,
+      saving: false,
+      error: null,
     })
   },
 
@@ -377,8 +451,28 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     await persist(get, set)
   },
 
-  async setCustomAllocation(expenseId, creditId) {
-    const customAllocations = { ...get().customAllocations, [expenseId]: creditId }
+  async setCustomAllocation(expenseId, creditId, amount) {
+    const value =
+      amount === undefined
+        ? creditId
+        : {
+            creditId,
+            amount: Math.max(0, Math.round(amount * 100) / 100),
+          }
+    const customAllocations = { ...get().customAllocations, [expenseId]: value }
+    set({ customAllocations })
+    await persist(get, set)
+  },
+
+  async setCoverageAllocationParts(expenseId, parts) {
+    const expense = get().transactions.find(
+      (transaction) => transaction.id === expenseId,
+    )
+    if (!expense || expense.amount >= 0) return
+    const normalized = allocationParts(parts, -expense.amount)
+    const customAllocations = { ...get().customAllocations }
+    if (normalized.length === 0) delete customAllocations[expenseId]
+    else customAllocations[expenseId] = normalized
     set({ customAllocations })
     await persist(get, set)
   },
@@ -396,84 +490,34 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   },
 
   async addManualTransaction(input) {
-    const merchantKey = buildMerchantKey(input.rawLabel)
-    const debit = input.amount < 0 ? input.amount : null
-    const credit = input.amount > 0 ? input.amount : null
     const id = `manual:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`
-
-    const existing = [...get().transactions]
-    const newTx: Transaction = {
-      id,
-      date: input.date,
-      valueDate: input.date,
-      debit,
-      credit,
-      amount: input.amount,
-      rawLabel: input.rawLabel,
-      merchantKey,
-      displayName: input.displayName?.trim() || undefined,
-      categoryId: input.categoryId || undefined,
-      note: input.note?.trim() || undefined,
-      order: 0,
-      sourceFile: 'manual',
-      isManual: true,
-      solde: 0,
-    }
-
-    const updated = [...existing, newTx].sort(compareLedger)
-    const idx = updated.findIndex((t) => t.id === id)
-
-    if (idx === 0) {
-      // Solde avant la première opération, puis application du mouvement inséré.
-      newTx.solde =
-        updated.length > 1
-          ? Math.round((updated[1].solde - updated[1].amount + input.amount) * 100) / 100
-          : input.amount
-    } else {
-      newTx.solde = Math.round((updated[idx - 1].solde + input.amount) * 100) / 100
-    }
-
-    // Propager le décalage de solde à tous les mouvements postérieurs
-    for (let k = idx + 1; k < updated.length; k++) {
-      updated[k].solde = Math.round((updated[k].solde + input.amount) * 100) / 100
-    }
-
-    // Réindexer les ordres de séquence
-    for (let i = 0; i < updated.length; i++) {
-      updated[i].order = i + 1
-    }
-
+    const newTx = buildManualTransaction(input, id)
+    const updated = insertIntoLedger(get().transactions, newTx)
     set({ transactions: updated })
     await persist(get, set)
-    return newTx
+    // `insertIntoLedger` clone la transaction pour calculer son solde :
+    // on renvoie l'objet réellement stocké.
+    return updated.find((transaction) => transaction.id === id) ?? newTx
   },
 
   async updateManualTransaction(id, input) {
     const target = get().transactions.find((transaction) => transaction.id === id)
     if (!target) return
 
-    // Supprimer l'ancienne opération puis réinsérer la nouvelle conserve
-    // une chaîne de soldes continue, y compris en cas de changement de date.
-    await get().deleteManualTransaction(id)
-    await get().addManualTransaction(input)
+    // Une seule mutation logique : suppression et réinsertion calculées en
+    // mémoire, puis une seule écriture chiffrée. L'identifiant est conservé
+    // pour ne pas perdre les affectations de couverture liées.
+    const next = buildManualTransaction(input, id)
+    const updated = updateInLedger(get().transactions, next)
+    set({ transactions: updated })
+    await persist(get, set)
   },
 
   async deleteManualTransaction(id) {
-    const existing = [...get().transactions]
-    const idx = existing.findIndex((t) => t.id === id)
-    if (idx < 0) return
+    const target = get().transactions.find((transaction) => transaction.id === id)
+    if (!target) return
 
-    const removedAmount = existing[idx].amount
-    const remaining = existing.filter((t) => t.id !== id)
-
-    // Propager le décalage inverse à tous les éléments suivants
-    for (let k = idx; k < remaining.length; k++) {
-      remaining[k].solde = Math.round((remaining[k].solde - removedAmount) * 100) / 100
-    }
-
-    for (let i = 0; i < remaining.length; i++) {
-      remaining[i].order = i + 1
-    }
+    const remaining = removeFromLedger(get().transactions, id)
 
     // Nettoyer aussi les affectations manuelles éventuelles liées à cette transaction
     const customAllocations = { ...get().customAllocations }
@@ -482,11 +526,19 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       delete customAllocations[id]
       allocationChanged = true
     }
-    for (const [expId, credId] of Object.entries(customAllocations)) {
-      if (credId === id) {
+    for (const [expId, value] of Object.entries(customAllocations)) {
+      const expense = get().transactions.find((transaction) => transaction.id === expId)
+      if (!expense || expense.amount >= 0) {
         delete customAllocations[expId]
         allocationChanged = true
+        continue
       }
+      const parts = allocationParts(value, -expense.amount)
+      const nextParts = parts.filter((part) => part.creditId !== id)
+      if (nextParts.length === parts.length) continue
+      allocationChanged = true
+      if (nextParts.length === 0) delete customAllocations[expId]
+      else customAllocations[expId] = nextParts
     }
 
     set({
@@ -527,6 +579,9 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   },
 
   async changePassword(currentPassword, nextPassword) {
+    // Les écritures en attente doivent être incluses dans la nouvelle
+    // enveloppe, sinon le changement de mot de passe peut les perdre.
+    await flushVaultWrites()
     const envelope = readEnvelope()
     if (!envelope) throw new Error('Aucun coffre local')
 
@@ -538,10 +593,29 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     const nextEnvelope = await encryptVault(nextKey, snapshot(get()))
     writeEnvelope(nextEnvelope)
     vaultKey = nextKey
+    // La clé d'accès scelle l'ancien mot de passe : elle devient invalide.
+    removePasskey()
+  },
+
+  async verifyPassword(password) {
+    const envelope = readEnvelope()
+    if (!envelope) return false
+    try {
+      const key = await unlockVaultKey(password, envelope)
+      await decryptVault(key, envelope)
+      return true
+    } catch {
+      return false
+    }
+  },
+
+  async retrySave() {
+    await persist(get, set)
   },
 
   reset() {
     clearEnvelope()
+    removePasskey()
     vaultKey = null
     createdAt = null
     set({
@@ -558,6 +632,18 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       createdAt: null,
       lastImport: null,
       error: null,
+      saving: false,
     })
   },
 }))
+
+persistQueue = createWriteQueue(async () => {
+  if (!vaultKey) return
+  const envelope = await encryptVault(vaultKey, snapshot(useVaultStore.getState()))
+  writeEnvelope(envelope)
+})
+
+/** Attend que toutes les mutations en attente soient réellement écrites. */
+export async function flushVaultWrites(): Promise<void> {
+  await persistQueue?.flush()
+}

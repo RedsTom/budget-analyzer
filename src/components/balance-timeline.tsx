@@ -11,6 +11,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { useIsMobile } from '@/hooks/use-media-query'
 import { formatAmount, formatCompactAmount, formatDate } from '@/lib/format'
 import { daysBetween, type DateRange } from '@/lib/period'
 import type { BalancePoint } from '@/lib/runway'
@@ -27,6 +28,8 @@ interface BalanceTimelineProps {
  * (presets / plage personnalisée) qui pilote la fenêtre affichée.
  */
 export function BalanceTimeline({ points, range, height = 300 }: BalanceTimelineProps) {
+  const mobile = useIsMobile()
+  const resolvedHeight = mobile ? Math.min(height, 200) : height
   const data = useMemo(() => {
     const scoped = points.filter((point) => point.date >= range.start && point.date <= range.end)
     const previous = points.findLast((point) => point.date < range.start)
@@ -41,9 +44,17 @@ export function BalanceTimeline({ points, range, height = 300 }: BalanceTimeline
     format(parseISO(value), span <= 120 ? 'd MMM' : 'MMM yy', { locale: fr })
 
   return (
-    <div style={{ height }} className="w-full">
+    <div
+      style={{ height: resolvedHeight }}
+      className="w-full"
+      role="img"
+      aria-label={`Évolution du solde du ${formatDate(range.start)} au ${formatDate(range.end)}`}
+    >
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+        <AreaChart
+          data={data}
+          margin={{ top: 8, right: mobile ? 4 : 12, left: 0, bottom: 0 }}
+        >
           <defs>
             <linearGradient id="balance-fill" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#6366f1" stopOpacity={0.35} />
@@ -57,17 +68,17 @@ export function BalanceTimeline({ points, range, height = 300 }: BalanceTimeline
           />
           <XAxis
             dataKey="date"
-            minTickGap={48}
+            minTickGap={mobile ? 32 : 48}
             tickLine={false}
             axisLine={false}
-            tick={{ fontSize: 11 }}
+            tick={{ fontSize: mobile ? 10 : 11 }}
             tickFormatter={tickLabel}
           />
           <YAxis
-            width={60}
+            width={mobile ? 44 : 60}
             tickLine={false}
             axisLine={false}
-            tick={{ fontSize: 11 }}
+            tick={{ fontSize: mobile ? 10 : 11 }}
             tickFormatter={(value: number) => formatCompactAmount(value)}
           />
           <RechartsTooltip

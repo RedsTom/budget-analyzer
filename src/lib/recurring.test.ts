@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   detectRecurring,
   recurringSummary,
+  seriesInRange,
   type RecurringSeries,
   type RecurringStatus,
 } from './recurring'
@@ -301,5 +302,36 @@ describe('detectRecurring', () => {
       averageAmount: 6.98,
       frequency: 'monthly',
     })
+  })
+})
+
+describe('seriesInRange', () => {
+  const series = detectRecurring(
+    [
+      tx('2025-01-05', -9.99),
+      tx('2025-02-05', -9.99),
+      tx('2025-03-05', -9.99),
+      tx('2025-04-05', -9.99),
+      tx('2025-05-05', -9.99),
+    ],
+    { reference: '2025-05-20' },
+  )
+
+  it('garde les séries avec une occurrence dans la période', () => {
+    expect(
+      seriesInRange(series, { start: '2025-01-01', end: '2025-02-28' }),
+    ).toHaveLength(1)
+  })
+
+  it('garde les séries avec une échéance à venir dans la période', () => {
+    expect(
+      seriesInRange(series, { start: '2025-06-01', end: '2025-06-30' }),
+    ).toHaveLength(1)
+  })
+
+  it('exclut les séries sans occurrence ni échéance', () => {
+    expect(
+      seriesInRange(series, { start: '2025-08-01', end: '2025-08-31' }),
+    ).toHaveLength(0)
   })
 })

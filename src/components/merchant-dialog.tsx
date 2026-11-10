@@ -22,6 +22,8 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { CATEGORIES } from '@/lib/categories'
 import { batchSuggestMerchantCategories, suggestMerchantName } from '@/lib/ai'
+import { aiFailureFromMessage } from '@/lib/ai-errors'
+import { guardAiOnline, notifyAiFailure } from '@/lib/ai-notify'
 import { useVaultStore } from '@/store/vault-store'
 
 /**
@@ -76,10 +78,15 @@ export function MerchantDialog({
   const canSuggest = aiEnabled && Boolean(aiApiKey) && labels.length > 0
 
   async function handleSuggest() {
+    if (!guardAiOnline(() => void handleSuggest())) return
     setSuggesting(true)
     try {
       const result = await suggestMerchantName(labels, name, aiApiKey)
       if (!result.ok) {
+        notifyAiFailure(
+          result.failure ?? aiFailureFromMessage(result.error),
+          () => void handleSuggest(),
+        )
         toast.error(result.error)
         return
       }
@@ -94,6 +101,7 @@ export function MerchantDialog({
 
   async function handleSuggestCategory() {
     if (!merchantKey) return
+    if (!guardAiOnline(() => void handleSuggestCategory())) return
     setSuggestingCategory(true)
     try {
       const result = await batchSuggestMerchantCategories(
@@ -101,6 +109,10 @@ export function MerchantDialog({
         aiApiKey,
       )
       if (!result.ok) {
+        notifyAiFailure(
+          result.failure ?? aiFailureFromMessage(result.error),
+          () => void handleSuggestCategory(),
+        )
         toast.error(result.error)
         return
       }
