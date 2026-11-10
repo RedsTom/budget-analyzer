@@ -15,8 +15,8 @@ describe('cleanLabel', () => {
     ).toBe('O RAMEN')
 
     expect(
-      cleanLabel('VIR DE MLE FLORENCE BARILLET CH3V26237L006035'),
-    ).toBe('FLORENCE BARILLET')
+      cleanLabel('VIR DE MME CAMILLE MOREL CH3V26237L006035'),
+    ).toBe('CAMILLE MOREL')
   })
 
   it('nettoie un prélèvement SEPA', () => {

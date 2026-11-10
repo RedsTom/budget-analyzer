@@ -54,9 +54,9 @@ export function contentHashOf(transaction: { id: string }): string {
  * Fusionne un import dans l'existant, en multiensemble.
  *
  * Deux lignes d'un même export peuvent être identiques champ pour champ et
- * être pourtant deux opérations réelles (vérifié : les deux
- * `30/07/2024 VIR DE M TOM BUTIN +20,00 solde 57,68` sont nécessaires à la
- * continuité du solde). On ne supprime donc que la *sur-occurrence* : une
+ * être pourtant deux opérations réelles (vérifié sur un relevé : deux lignes
+ * identiques au même montant et même solde sont nécessaires à la continuité
+ * du solde). On ne supprime donc que la *sur-occurrence* : une
  * même ligne déjà présente autant de fois qu'elle l'est dans l'existant.
  *
  * Idempotent : réimporter un fichier, ou un export qui chevauche le précédent,

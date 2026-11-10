@@ -21,14 +21,14 @@ function sampleVault(): VaultData {
     debit: null,
     credit: 40,
     amount: 40,
-    rawLabel: 'VIR DE MLE FLORENCE BARILLET CH3V26237L006035',
+    rawLabel: 'VIR DE MME CAMILLE MOREL CH3V26237L006035',
     solde: 59.21,
     order: 0,
     sourceFile: 'test.csv',
-    merchantKey: 'FLORENCE BARILLET',
+    merchantKey: 'CAMILLE MOREL',
   })
-  vault.aliases['FLORENCE BARILLET'] = {
-    merchantKey: 'FLORENCE BARILLET',
+  vault.aliases['CAMILLE MOREL'] = {
+    merchantKey: 'CAMILLE MOREL',
     displayName: 'Maman',
   }
   return vault
@@ -43,7 +43,7 @@ describe('coffre chiffré', () => {
     expect(isEncryptedEnvelope(envelope)).toBe(true)
     expect(envelope.kdf).toBe('PBKDF2-SHA256')
     expect(envelope.iterations).toBe(ITERATIONS)
-    expect(JSON.stringify(envelope)).not.toContain('FLORENCE')
+    expect(JSON.stringify(envelope)).not.toContain('CAMILLE')
 
     const unlocked = await unlockVaultKey('mot-de-passe-solide', envelope)
     const decrypted = await decryptVault(unlocked, envelope)
